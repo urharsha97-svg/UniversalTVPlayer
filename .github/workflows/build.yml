@@ -27,41 +27,87 @@ jobs:
         with:
           gradle-version: "8.10.2"
 
+      - name: Find V4 ZIP
+        shell: bash
+        run: |
+          set -e
+
+          echo "===== Repository ZIP files ====="
+          find . -maxdepth 1 -type f -name "*.zip" -print
+
+          ZIP_FILE=$(find . -maxdepth 1 -type f \
+            \( -iname "*UniversalTVPlayer*V4*.zip" \
+               -o -iname "*V4*UniversalEngine*.zip" \) \
+            | head -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: Universal TV Player V4 ZIP not found!"
+            exit 1
+          fi
+
+          echo "Found V4 ZIP:"
+          echo "$ZIP_FILE"
+
+          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
+
+      - name: Extract V4 Project
+        shell: bash
+        run: |
+          set -e
+
+          echo "===== Extracting V4 ZIP ====="
+
+          rm -rf extracted
+          mkdir -p extracted
+
+          unzip -q "$ZIP_FILE" -d extracted
+
+          echo ""
+          echo "===== Extracted files ====="
+          find extracted -maxdepth 5 -type f | sort | head -300
+
       - name: Locate Android Project
         id: project
         shell: bash
         run: |
           set -e
 
-          echo "===== Searching Android project ====="
+          echo "===== Searching extracted Android project ====="
 
-          SETTINGS=$(find . \
+          SETTINGS=$(find extracted \
             -type f \
             -name "settings.gradle.kts" \
-            -not -path "./.git/*" \
             | head -n 1)
 
           if [ -z "$SETTINGS" ]; then
-            echo "ERROR: settings.gradle.kts not found"
-            echo "Repository contents:"
-            find . -maxdepth 5 -type f | sort
+            echo "ERROR: settings.gradle.kts not found after extracting V4 ZIP!"
+            echo ""
+            echo "Extracted contents:"
+            find extracted -maxdepth 7 -type f | sort
             exit 1
           fi
 
           PROJECT_DIR=$(dirname "$SETTINGS")
 
+          echo ""
           echo "Found settings.gradle.kts:"
           echo "$SETTINGS"
 
-          echo "Project directory:"
+          echo ""
+          echo "Android project directory:"
           echo "$PROJECT_DIR"
 
           if [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
-            echo "ERROR: app/build.gradle.kts not found"
-            echo "Files in project:"
-            find "$PROJECT_DIR" -maxdepth 5 -type f | sort
+            echo ""
+            echo "ERROR: app/build.gradle.kts not found!"
+            echo ""
+            echo "Project files:"
+            find "$PROJECT_DIR" -maxdepth 6 -type f | sort
             exit 1
           fi
+
+          echo ""
+          echo "Android project verified successfully."
 
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
@@ -76,11 +122,11 @@ jobs:
             app/build.gradle.kts || true
 
           echo ""
-          echo "===== Project ====="
+          echo "===== Project directory ====="
           pwd
 
           echo ""
-          echo "===== App files ====="
+          echo "===== App source files ====="
           find app/src -type f | sort | head -200
 
       - name: Build Universal TV Player V4
@@ -89,7 +135,7 @@ jobs:
         run: |
           set -e
 
-          echo "===== Building V4 APK ====="
+          echo "===== Building Universal TV Player V4 ====="
 
           gradle :app:assembleDebug \
             --no-daemon \
@@ -108,13 +154,18 @@ jobs:
 
           if [ ! -d "$APK_DIR" ]; then
             echo "ERROR: APK output directory not found!"
-            find app/build -maxdepth 6 -type f 2>/dev/null || true
+            find app/build -maxdepth 8 -type f 2>/dev/null || true
             exit 1
           fi
 
+          echo ""
+          echo "Generated APK files:"
           find "$APK_DIR" -type f -name "*.apk" -print
 
-          APK=$(find "$APK_DIR" -type f -name "*.apk" | head -n 1)
+          APK=$(find "$APK_DIR" \
+            -type f \
+            -name "*.apk" \
+            | head -n 1)
 
           if [ -z "$APK" ]; then
             echo "ERROR: APK was not generated!"
@@ -122,7 +173,7 @@ jobs:
           fi
 
           echo ""
-          echo "SUCCESS!"
+          echo "===== BUILD SUCCESS ====="
           ls -lh "$APK"
 
       - name: Upload V4 APK

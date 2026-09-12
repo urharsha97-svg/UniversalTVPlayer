@@ -27,25 +27,107 @@ jobs:
         with:
           gradle-version: "8.10.2"
 
-      - name: Verify Project
+      - name: Locate Android Project
+        id: project
+        shell: bash
         run: |
-          echo "Universal TV Player V4"
-          grep -n "versionCode\|versionName" app/build.gradle.kts
+          set -e
 
-      - name: Build V4 Debug APK
+          echo "===== Searching Android project ====="
+
+          SETTINGS=$(find . \
+            -type f \
+            -name "settings.gradle.kts" \
+            -not -path "./.git/*" \
+            | head -n 1)
+
+          if [ -z "$SETTINGS" ]; then
+            echo "ERROR: settings.gradle.kts not found"
+            echo "Repository contents:"
+            find . -maxdepth 5 -type f | sort
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$SETTINGS")
+
+          echo "Found settings.gradle.kts:"
+          echo "$SETTINGS"
+
+          echo "Project directory:"
+          echo "$PROJECT_DIR"
+
+          if [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
+            echo "ERROR: app/build.gradle.kts not found"
+            echo "Files in project:"
+            find "$PROJECT_DIR" -maxdepth 5 -type f | sort
+            exit 1
+          fi
+
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Show V4 Version
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        shell: bash
         run: |
+          echo "===== Universal TV Player Version ====="
+
+          grep -nE \
+            "versionCode|versionName" \
+            app/build.gradle.kts || true
+
+          echo ""
+          echo "===== Project ====="
+          pwd
+
+          echo ""
+          echo "===== App files ====="
+          find app/src -type f | sort | head -200
+
+      - name: Build Universal TV Player V4
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -e
+
+          echo "===== Building V4 APK ====="
+
           gradle :app:assembleDebug \
             --no-daemon \
-            --stacktrace
+            --stacktrace \
+            --warning-mode all
 
       - name: Verify APK
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        shell: bash
         run: |
-          ls -lh app/build/outputs/apk/debug/
-          test -f app/build/outputs/apk/debug/app-debug.apk
+          set -e
 
-      - name: Upload Universal TV Player V4
+          APK_DIR="app/build/outputs/apk/debug"
+
+          echo "===== APK Output ====="
+
+          if [ ! -d "$APK_DIR" ]; then
+            echo "ERROR: APK output directory not found!"
+            find app/build -maxdepth 6 -type f 2>/dev/null || true
+            exit 1
+          fi
+
+          find "$APK_DIR" -type f -name "*.apk" -print
+
+          APK=$(find "$APK_DIR" -type f -name "*.apk" | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK was not generated!"
+            exit 1
+          fi
+
+          echo ""
+          echo "SUCCESS!"
+          ls -lh "$APK"
+
+      - name: Upload V4 APK
         uses: actions/upload-artifact@v4
         with:
           name: UniversalTVPlayer-V4-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ steps.project.outputs.project_dir }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error

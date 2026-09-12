@@ -13,154 +13,270 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+
+      # --------------------------------------------------
+      # 1. Checkout repository
+      # --------------------------------------------------
+      - name: Checkout repository
         uses: actions/checkout@v4
 
+
+      # --------------------------------------------------
+      # 2. Java 17
+      # --------------------------------------------------
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
+
+      # --------------------------------------------------
+      # 3. Gradle
+      # --------------------------------------------------
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.10.2"
 
-      - name: Find V4 ZIP
+
+      # --------------------------------------------------
+      # 4. Find EXACT V4 ALL-OPTIONS ZIP
+      # --------------------------------------------------
+      - name: Find V4 ALL-OPTIONS ZIP
         shell: bash
         run: |
           set -e
 
-          echo "===== Repository ZIP files ====="
-          find . -maxdepth 1 -type f -name "*.zip" -print
+          echo "=========================================="
+          echo "UniversalTVPlayer V4 Build"
+          echo "=========================================="
 
-          ZIP_FILE=$(find . -maxdepth 1 -type f \
-            \( -iname "*UniversalTVPlayer*V4*.zip" \
-               -o -iname "*V4*UniversalEngine*.zip" \) \
-            | head -n 1)
+          echo ""
+          echo "Repository files:"
+          ls -lah
+
+          ZIP_FILE=""
+
+          # Prefer the exact ALL-OPTIONS package.
+          if [ -f "./UniversalTVPlayer-V4-UniversalEngine-ALL-OPTIONS.zip" ]; then
+            ZIP_FILE="./UniversalTVPlayer-V4-UniversalEngine-ALL-OPTIONS.zip"
+          fi
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: Universal TV Player V4 ZIP not found!"
+            echo ""
+            echo "ERROR: Exact V4 ALL-OPTIONS ZIP was not found."
+            echo ""
+            echo "Available ZIP files:"
+            find . -maxdepth 1 -type f -name "*.zip" -print
             exit 1
           fi
 
-          echo "Found V4 ZIP:"
+          echo ""
+          echo "Using:"
           echo "$ZIP_FILE"
 
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
 
+
+      # --------------------------------------------------
+      # 5. Validate ZIP
+      # --------------------------------------------------
+      - name: Validate V4 ZIP
+        shell: bash
+        run: |
+          set -e
+
+          echo "=========================================="
+          echo "Validating V4 ZIP"
+          echo "=========================================="
+
+          unzip -t "$ZIP_FILE"
+
+          echo ""
+          echo "Checking required project files..."
+
+          unzip -l "$ZIP_FILE" | grep -q "v3/settings.gradle.kts"
+          unzip -l "$ZIP_FILE" | grep -q "v3/build.gradle.kts"
+          unzip -l "$ZIP_FILE" | grep -q "v3/app/build.gradle.kts"
+
+          echo ""
+          echo "ZIP validation SUCCESS."
+
+
+      # --------------------------------------------------
+      # 6. Extract ZIP
+      # --------------------------------------------------
       - name: Extract V4 Project
         shell: bash
         run: |
           set -e
 
-          echo "===== Extracting V4 ZIP ====="
-
           rm -rf extracted
           mkdir -p extracted
+
+          echo "=========================================="
+          echo "Extracting V4 project"
+          echo "=========================================="
 
           unzip -q "$ZIP_FILE" -d extracted
 
           echo ""
-          echo "===== Extracted files ====="
-          find extracted -maxdepth 5 -type f | sort | head -300
+          echo "Extracted project:"
+          find extracted/v3 -maxdepth 4 -type f | sort
 
-      - name: Locate Android Project
-        id: project
+
+      # --------------------------------------------------
+      # 7. Verify Android project
+      # --------------------------------------------------
+      - name: Verify Android Project
         shell: bash
         run: |
           set -e
 
-          echo "===== Searching extracted Android project ====="
+          PROJECT_DIR="extracted/v3"
 
-          SETTINGS=$(find extracted \
-            -type f \
-            -name "settings.gradle.kts" \
-            | head -n 1)
+          echo "=========================================="
+          echo "Verifying Android project"
+          echo "=========================================="
 
-          if [ -z "$SETTINGS" ]; then
-            echo "ERROR: settings.gradle.kts not found after extracting V4 ZIP!"
-            echo ""
-            echo "Extracted contents:"
-            find extracted -maxdepth 7 -type f | sort
+          if [ ! -f "$PROJECT_DIR/settings.gradle.kts" ]; then
+            echo "ERROR: settings.gradle.kts missing!"
             exit 1
           fi
 
-          PROJECT_DIR=$(dirname "$SETTINGS")
-
-          echo ""
-          echo "Found settings.gradle.kts:"
-          echo "$SETTINGS"
-
-          echo ""
-          echo "Android project directory:"
-          echo "$PROJECT_DIR"
+          if [ ! -f "$PROJECT_DIR/build.gradle.kts" ]; then
+            echo "ERROR: root build.gradle.kts missing!"
+            exit 1
+          fi
 
           if [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
-            echo ""
-            echo "ERROR: app/build.gradle.kts not found!"
-            echo ""
-            echo "Project files:"
-            find "$PROJECT_DIR" -maxdepth 6 -type f | sort
+            echo "ERROR: app/build.gradle.kts missing!"
+            exit 1
+          fi
+
+          if [ ! -f "$PROJECT_DIR/app/src/main/AndroidManifest.xml" ]; then
+            echo "ERROR: AndroidManifest.xml missing!"
             exit 1
           fi
 
           echo ""
-          echo "Android project verified successfully."
+          echo "Android project verified."
 
-          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
-      - name: Show V4 Version
-        working-directory: ${{ steps.project.outputs.project_dir }}
-        shell: bash
-        run: |
-          echo "===== Universal TV Player Version ====="
-
-          grep -nE \
-            "versionCode|versionName" \
-            app/build.gradle.kts || true
-
-          echo ""
-          echo "===== Project directory ====="
-          pwd
-
-          echo ""
-          echo "===== App source files ====="
-          find app/src -type f | sort | head -200
-
-      - name: Build Universal TV Player V4
-        working-directory: ${{ steps.project.outputs.project_dir }}
+      # --------------------------------------------------
+      # 8. Safety check:
+      #    Make absolutely sure old missing dependencies
+      #    are NOT present.
+      # --------------------------------------------------
+      - name: Check Media3 Dependencies
+        working-directory: extracted/v3
         shell: bash
         run: |
           set -e
 
-          echo "===== Building Universal TV Player V4 ====="
+          echo "=========================================="
+          echo "Checking Media3 dependencies"
+          echo "=========================================="
+
+          echo ""
+          echo "Media3 dependencies currently in project:"
+          grep -n "media3" app/build.gradle.kts || true
+
+          echo ""
+          echo "Checking for unavailable decoder modules..."
+
+          if grep -q "media3-decoder-ffmpeg" app/build.gradle.kts; then
+            echo "ERROR: media3-decoder-ffmpeg is present!"
+            exit 1
+          fi
+
+          if grep -q "media3-decoder-av1" app/build.gradle.kts; then
+            echo "ERROR: media3-decoder-av1 is present!"
+            exit 1
+          fi
+
+          if grep -q "media3-decoder-vp9" app/build.gradle.kts; then
+            echo "ERROR: media3-decoder-vp9 is present!"
+            exit 1
+          fi
+
+          if grep -q "media3-decoder-opus" app/build.gradle.kts; then
+            echo "ERROR: media3-decoder-opus is present!"
+            exit 1
+          fi
+
+          if grep -q "media3-decoder-flac" app/build.gradle.kts; then
+            echo "ERROR: media3-decoder-flac is present!"
+            exit 1
+          fi
+
+          echo ""
+          echo "Media3 dependency check PASSED."
+
+
+      # --------------------------------------------------
+      # 9. Show V4 version
+      # --------------------------------------------------
+      - name: Verify V4 Version
+        working-directory: extracted/v3
+        shell: bash
+        run: |
+          set -e
+
+          echo "=========================================="
+          echo "UniversalTVPlayer Version"
+          echo "=========================================="
+
+          grep -nE "versionCode|versionName" app/build.gradle.kts
+
+          echo ""
+          echo "Expected:"
+          echo "versionCode = 4"
+          echo "versionName = 0.4.1"
+
+
+      # --------------------------------------------------
+      # 10. Build
+      # --------------------------------------------------
+      - name: Build Universal TV Player V4
+        working-directory: extracted/v3
+        shell: bash
+        run: |
+          set -e
+
+          echo "=========================================="
+          echo "BUILDING UNIVERSAL TV PLAYER V4"
+          echo "=========================================="
 
           gradle :app:assembleDebug \
             --no-daemon \
             --stacktrace \
             --warning-mode all
 
+          echo ""
+          echo "Gradle build completed."
+
+
+      # --------------------------------------------------
+      # 11. Verify APK
+      # --------------------------------------------------
       - name: Verify APK
-        working-directory: ${{ steps.project.outputs.project_dir }}
+        working-directory: extracted/v3
         shell: bash
         run: |
           set -e
 
           APK_DIR="app/build/outputs/apk/debug"
 
-          echo "===== APK Output ====="
+          echo "=========================================="
+          echo "VERIFYING APK"
+          echo "=========================================="
 
           if [ ! -d "$APK_DIR" ]; then
-            echo "ERROR: APK output directory not found!"
-            find app/build -maxdepth 8 -type f 2>/dev/null || true
+            echo "ERROR: APK directory does not exist!"
             exit 1
           fi
-
-          echo ""
-          echo "Generated APK files:"
-          find "$APK_DIR" -type f -name "*.apk" -print
 
           APK=$(find "$APK_DIR" \
             -type f \
@@ -169,16 +285,30 @@ jobs:
 
           if [ -z "$APK" ]; then
             echo "ERROR: APK was not generated!"
+
+            echo ""
+            echo "Build directory:"
+            find app/build -type f | sort || true
+
             exit 1
           fi
 
           echo ""
-          echo "===== BUILD SUCCESS ====="
+          echo "APK SUCCESSFULLY GENERATED:"
           ls -lh "$APK"
 
-      - name: Upload V4 APK
+          echo ""
+          echo "APK path:"
+          echo "$APK"
+
+
+      # --------------------------------------------------
+      # 12. Upload APK
+      # --------------------------------------------------
+      - name: Upload UniversalTVPlayer V4 APK
         uses: actions/upload-artifact@v4
         with:
           name: UniversalTVPlayer-V4-APK
-          path: ${{ steps.project.outputs.project_dir }}/app/build/outputs/apk/debug/*.apk
+          path: extracted/v3/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+          retention-days: 30

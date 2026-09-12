@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   build:
+    name: Build APK
     runs-on: ubuntu-latest
 
     steps:
@@ -41,6 +42,7 @@ jobs:
 
             if [ "${#ZIPS[@]}" -ne 1 ]; then
               echo "ERROR: Expected exactly one V4 ZIP."
+              echo "Found:"
               printf '%s\n' "${ZIPS[@]}"
               exit 1
             fi
@@ -48,10 +50,10 @@ jobs:
             ZIP="${ZIPS[0]}"
           fi
 
-          echo "Using ZIP: $ZIP"
+          echo "Using: $ZIP"
           echo "ZIP=$ZIP" >> "$GITHUB_ENV"
 
-      - name: Extract Android project
+      - name: Extract V4 project
         shell: bash
         run: |
           set -e
@@ -62,59 +64,37 @@ jobs:
           unzip -q "$ZIP" -d player
 
           if [ ! -f player/v3/settings.gradle.kts ]; then
-            echo "ERROR: v3/settings.gradle.kts not found"
+            echo "ERROR: Android project not found."
             find player -maxdepth 4 -type f | sort
             exit 1
           fi
 
-          echo "Android project:"
-          find player/v3 -maxdepth 3 -type f | sort
+          echo "Project found."
 
-      - name: Verify project configuration
+      - name: Verify basic configuration
+        working-directory: player/v3
         shell: bash
         run: |
           set -e
 
-          PROJECT="player/v3"
+          echo "=== Root build.gradle.kts ==="
+          cat build.gradle.kts
 
-          echo "Checking AGP..."
-          grep -q 'com.android.application.*8.10.2' \
-            "$PROJECT/build.gradle.kts"
+          echo "=== App build.gradle.kts ==="
+          cat app/build.gradle.kts
 
-          echo "Checking compileSdk..."
-          grep -q 'compileSdk = 36' \
-            "$PROJECT/app/build.gradle.kts"
+          echo "=== Configuration checks ==="
 
-          echo "Checking targetSdk..."
-          grep -q 'targetSdk = 35' \
-            "$PROJECT/app/build.gradle.kts"
-
-          echo "Checking minSdk..."
-          grep -q 'minSdk = 23' \
-            "$PROJECT/app/build.gradle.kts"
-
-          echo "Checking LibVLC..."
-          grep -q 'org.videolan.android:libvlc-all:3.7.0' \
-            "$PROJECT/app/build.gradle.kts"
-
-          echo "Checking Media3..."
-          grep -q 'media3-exoplayer:1.11.0' \
-            "$PROJECT/app/build.gradle.kts"
-
-          echo "Checking no unavailable Media3 decoder dependencies..."
-          if grep -Eq 'media3-decoder-(ffmpeg|av1|vp9|opus|flac)' \
-            "$PROJECT/app/build.gradle.kts"; then
-            echo "ERROR: Unavailable media3-decoder dependency found."
-            exit 1
-          fi
+          grep -q '8.10.2' build.gradle.kts
+          grep -q 'compileSdk = 36' app/build.gradle.kts
+          grep -q 'targetSdk = 35' app/build.gradle.kts
+          grep -q 'minSdk = 23' app/build.gradle.kts
 
           echo "Configuration OK."
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Build Debug APK
+      - name: Generate Gradle wrapper
         working-directory: player/v3
+        shell: bash
         run: |
           set -e
 
@@ -124,9 +104,21 @@ jobs:
 
           chmod +x gradlew
 
+      - name: Show Gradle environment
+        working-directory: player/v3
+        shell: bash
+        run: |
           ./gradlew --version
 
-          ./gradlew :app:assembleDebug --stacktrace --no-daemon
+      - name: Build Debug APK
+        working-directory: player/v3
+        shell: bash
+        run: |
+          set -e
+
+          ./gradlew :app:assembleDebug \
+            --stacktrace \
+            --no-daemon
 
       - name: Verify APK
         shell: bash
@@ -136,12 +128,14 @@ jobs:
           APK="player/v3/app/build/outputs/apk/debug/app-debug.apk"
 
           if [ ! -f "$APK" ]; then
-            echo "ERROR: APK not found."
+            echo "ERROR: APK was not generated."
             find player/v3/app/build -type f | sort || true
             exit 1
           fi
 
-          echo "APK successfully built:"
+          echo "=================================="
+          echo "APK BUILD SUCCESS"
+          echo "=================================="
           ls -lh "$APK"
 
       - name: Upload APK

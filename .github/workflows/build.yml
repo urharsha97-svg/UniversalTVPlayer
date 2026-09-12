@@ -1,11 +1,11 @@
-name: Build UniversalTVPlayer V3
+name: Build Universal TV Player V3 APK
 
 on:
   workflow_dispatch:
   push:
-    paths:
-      - "UniversalTVPlayer-V3.zip"
-      - ".github/workflows/build.yml"
+    branches:
+      - main
+      - master
 
 jobs:
   build:
@@ -29,17 +29,41 @@ jobs:
       - name: Extract V3
         run: |
           rm -rf player
-          mkdir player
-          unzip -q UniversalTVPlayer-V3.zip -d player
-          echo "V3 extracted:"
-          find player -maxdepth 4 -type f | head -150
+          mkdir -p player
 
-      - name: Build APK
+          unzip -q UniversalTVPlayer-V3.zip -d player
+
+          echo "===== Project files ====="
+          find player -maxdepth 5 -type f | sort
+
+      - name: Check project
+        working-directory: player/v3
         run: |
-          gradle -p player :app:assembleDebug --no-daemon
+          echo "===== settings.gradle.kts ====="
+          cat settings.gradle.kts
+
+          echo "===== app/build.gradle.kts ====="
+          cat app/build.gradle.kts
+
+          echo "===== Android source ====="
+          find app/src -type f | sort
+
+      - name: Build Debug APK
+        working-directory: player/v3
+        run: |
+          gradle :app:assembleDebug \
+            --no-daemon \
+            --stacktrace \
+            --warning-mode all
+
+      - name: Check APK
+        run: |
+          ls -lh player/v3/app/build/outputs/apk/debug/
+          test -f player/v3/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: UniversalTVPlayer-V3-APK
-          path: player/app/build/outputs/apk/debug/app-debug.apk
+          path: player/v3/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

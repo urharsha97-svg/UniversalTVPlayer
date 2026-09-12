@@ -1,10 +1,10 @@
-name: Build UniversalTVPlayer V2
+name: Build UniversalTVPlayer V3
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - "UniversalTVPlayer-V2.zip"
+      - "UniversalTVPlayer-V3.zip"
       - ".github/workflows/build.yml"
 
 jobs:
@@ -26,13 +26,13 @@ jobs:
         with:
           gradle-version: "8.10.2"
 
-      - name: Extract V2
+      - name: Extract V3
         run: |
           rm -rf player
           mkdir player
-          unzip -q UniversalTVPlayer-V2.zip -d player
-          echo "V2 extracted:"
-          find player -maxdepth 3 -type f | head -100
+          unzip -q UniversalTVPlayer-V3.zip -d player
+          echo "V3 extracted:"
+          find player -maxdepth 4 -type f | head -150
 
       - name: Build APK
         run: |
@@ -41,5 +41,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: UniversalTVPlayer-V2-APK
+          name: UniversalTVPlayer-V3-APK
           path: player/app/build/outputs/apk/debug/app-debug.apk

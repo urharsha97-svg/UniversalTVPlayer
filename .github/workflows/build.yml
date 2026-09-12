@@ -1,18 +1,16 @@
-name: Build Universal TV Player V4 APK
+name: Build UniversalTVPlayer V4
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
-      - master
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: Build V4 APK
     runs-on: ubuntu-latest
 
     steps:
@@ -25,290 +23,131 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Gradle 8.11.1
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.11.1"
-
-      - name: Show build environment
+      - name: Find V4 ZIP
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
-          echo "=========================================="
-          echo "UniversalTVPlayer V4 Build"
-          echo "=========================================="
+          EXACT="UniversalTVPlayer-V4-UniversalEngine-ALL-OPTIONS.zip"
 
-          java -version
-          echo
-          gradle --version
-          echo
-
-          echo "Repository ZIP files:"
-          find . -maxdepth 1 -type f -iname "*.zip" -printf '%f\n' | sort
-
-      - name: Find V4 ALL-OPTIONS ZIP
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          EXACT="./UniversalTVPlayer-V4-UniversalEngine-ALL-OPTIONS.zip"
-
-          # First prefer the normal final filename.
           if [ -f "$EXACT" ]; then
-            ZIP_FILE="$EXACT"
+            ZIP="$EXACT"
           else
-            # Otherwise accept a versioned V4 ALL-OPTIONS filename.
-            mapfile -t CANDIDATES < <(
+            mapfile -t ZIPS < <(
               find . -maxdepth 1 -type f \
-                -iname 'UniversalTVPlayer-V4-UniversalEngine-ALL-OPTIONS*.zip' \
-                -printf '%p\n' | sort
+                -name 'UniversalTVPlayer-V4-UniversalEngine-ALL-OPTIONS*.zip' \
+                -printf '%f\n'
             )
 
-            if [ "${#CANDIDATES[@]}" -eq 0 ]; then
-              echo "ERROR: No V4 ALL-OPTIONS ZIP found."
-              echo
-              echo "Available ZIP files:"
-              find . -maxdepth 1 -type f \
-                -iname "*.zip" \
-                -printf '%p\n' | sort
+            if [ "${#ZIPS[@]}" -ne 1 ]; then
+              echo "ERROR: Expected exactly one V4 ZIP."
+              printf '%s\n' "${ZIPS[@]}"
               exit 1
             fi
 
-            if [ "${#CANDIDATES[@]}" -gt 1 ]; then
-              echo "ERROR: Multiple V4 ALL-OPTIONS ZIP files found:"
-              printf '  %s\n' "${CANDIDATES[@]}"
-              echo
-              echo "Keep only ONE V4 ALL-OPTIONS ZIP in the repository."
-              exit 1
-            fi
-
-            ZIP_FILE="${CANDIDATES[0]}"
+            ZIP="${ZIPS[0]}"
           fi
 
-          echo
-          echo "=========================================="
-          echo "Selected V4 ZIP:"
-          echo "$ZIP_FILE"
-          echo "=========================================="
+          echo "Using ZIP: $ZIP"
+          echo "ZIP=$ZIP" >> "$GITHUB_ENV"
 
-          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
-
-      - name: Validate ZIP
+      - name: Extract Android project
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
-          echo "Testing ZIP integrity..."
+          rm -rf player
+          mkdir -p player
 
-          unzip -t "$ZIP_FILE"
+          unzip -q "$ZIP" -d player
 
-          echo
-          echo "ZIP contents:"
-          unzip -l "$ZIP_FILE" | sed -n '1,160p'
-
-      - name: Extract V4 project
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          rm -rf extracted
-          mkdir -p extracted
-
-          unzip -q "$ZIP_FILE" -d extracted
-
-          echo "Checking V4 project structure..."
-
-          test -f extracted/v3/settings.gradle.kts
-          test -f extracted/v3/build.gradle.kts
-          test -f extracted/v3/app/build.gradle.kts
-          test -f extracted/v3/app/src/main/AndroidManifest.xml
-
-          echo "V4 project structure validated."
-
-      - name: Verify V4 build configuration
-        working-directory: extracted/v3
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "=========================================="
-          echo "Checking Gradle configuration"
-          echo "=========================================="
-
-          echo
-          echo "Root build.gradle.kts:"
-          cat build.gradle.kts
-
-          echo
-          echo "App dependencies:"
-          grep -n "implementation" app/build.gradle.kts || true
-
-          echo
-          echo "Checking AGP 8.9.2..."
-
-          grep -q \
-            'id("com.android.application") version "8.9.2" apply false' \
-            build.gradle.kts \
-            || {
-              echo "ERROR: AGP 8.9.2 not found."
-              exit 1
-            }
-
-          echo "AGP 8.9.2 OK."
-
-          echo
-          echo "Checking core-ktx 1.17.0..."
-
-          grep -q \
-            'implementation("androidx.core:core-ktx:1.17.0")' \
-            app/build.gradle.kts \
-            || {
-              echo "ERROR: core-ktx 1.17.0 not found."
-              exit 1
-            }
-
-          echo "core-ktx 1.17.0 OK."
-
-          echo
-          echo "Checking LibVLC 3.7.0..."
-
-          grep -q \
-            'implementation("org.videolan.android:libvlc-all:3.7.0")' \
-            app/build.gradle.kts \
-            || {
-              echo "ERROR: LibVLC 3.7.0 not found."
-              exit 1
-            }
-
-          echo "LibVLC 3.7.0 OK."
-
-          echo
-          echo "Checking unavailable Media3 decoder dependencies..."
-
-          if grep -Eq \
-            'media3-decoder-(ffmpeg|av1|vp9|opus|flac)' \
-            app/build.gradle.kts; then
-
-            echo "ERROR: Unsupported/unavailable Media3 decoder dependency detected."
-
-            grep -nE \
-              'media3-decoder-(ffmpeg|av1|vp9|opus|flac)' \
-              app/build.gradle.kts
-
+          if [ ! -f player/v3/settings.gradle.kts ]; then
+            echo "ERROR: v3/settings.gradle.kts not found"
+            find player -maxdepth 4 -type f | sort
             exit 1
           fi
 
-          echo "No unavailable media3-decoder dependencies."
+          echo "Android project:"
+          find player/v3 -maxdepth 3 -type f | sort
 
-          echo
-          echo "Checking compileSdk 35..."
-
-          grep -q \
-            'compileSdk = 35' \
-            app/build.gradle.kts \
-            || {
-              echo "ERROR: compileSdk 35 not found."
-              exit 1
-            }
-
-          echo "compileSdk 35 OK."
-
-          echo
-          echo "Checking targetSdk 35..."
-
-          grep -q \
-            'targetSdk = 35' \
-            app/build.gradle.kts \
-            || {
-              echo "ERROR: targetSdk 35 not found."
-              exit 1
-            }
-
-          echo "targetSdk 35 OK."
-
-          echo
-          echo "=========================================="
-          echo "ALL CONFIGURATION CHECKS PASSED"
-          echo "=========================================="
-
-      - name: Build Universal TV Player V4
-        working-directory: extracted/v3
+      - name: Verify project configuration
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
-          echo "=========================================="
-          echo "Starting Gradle build"
-          echo "=========================================="
+          PROJECT="player/v3"
 
-          echo
-          echo "Gradle version:"
-          gradle --version
+          echo "Checking AGP..."
+          grep -q 'com.android.application.*8.10.2' \
+            "$PROJECT/build.gradle.kts"
 
-          echo
-          echo "Running:"
-          echo "gradle :app:assembleDebug"
+          echo "Checking compileSdk..."
+          grep -q 'compileSdk = 36' \
+            "$PROJECT/app/build.gradle.kts"
 
-          gradle :app:assembleDebug \
-            --no-daemon \
-            --stacktrace \
-            --warning-mode all
+          echo "Checking targetSdk..."
+          grep -q 'targetSdk = 35' \
+            "$PROJECT/app/build.gradle.kts"
 
-      - name: Verify generated APK
-        working-directory: extracted/v3
-        shell: bash
-        run: |
-          set -euo pipefail
+          echo "Checking minSdk..."
+          grep -q 'minSdk = 23' \
+            "$PROJECT/app/build.gradle.kts"
 
-          APK_DIR="app/build/outputs/apk/debug"
+          echo "Checking LibVLC..."
+          grep -q 'org.videolan.android:libvlc-all:3.7.0' \
+            "$PROJECT/app/build.gradle.kts"
 
-          echo "=========================================="
-          echo "Checking generated APK"
-          echo "=========================================="
+          echo "Checking Media3..."
+          grep -q 'media3-exoplayer:1.11.0' \
+            "$PROJECT/app/build.gradle.kts"
 
-          if [ ! -d "$APK_DIR" ]; then
-            echo "ERROR: APK output directory does not exist."
-
-            echo
-            echo "Build directory:"
-            find app/build -maxdepth 6 -type f | sort || true
-
+          echo "Checking no unavailable Media3 decoder dependencies..."
+          if grep -Eq 'media3-decoder-(ffmpeg|av1|vp9|opus|flac)' \
+            "$PROJECT/app/build.gradle.kts"; then
+            echo "ERROR: Unavailable media3-decoder dependency found."
             exit 1
           fi
 
-          mapfile -t APKS < <(
-            find "$APK_DIR" \
-              -type f \
-              -name "*.apk" \
-              -print
-          )
+          echo "Configuration OK."
 
-          if [ "${#APKS[@]}" -eq 0 ]; then
-            echo "ERROR: No APK was generated."
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
 
-            echo
-            echo "Available build files:"
-            find app/build -maxdepth 6 -type f | sort || true
+      - name: Build Debug APK
+        working-directory: player/v3
+        run: |
+          set -e
 
+          gradle wrapper \
+            --gradle-version 8.11.1 \
+            --distribution-type bin
+
+          chmod +x gradlew
+
+          ./gradlew --version
+
+          ./gradlew :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -e
+
+          APK="player/v3/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK not found."
+            find player/v3/app/build -type f | sort || true
             exit 1
           fi
 
-          echo
-          echo "=========================================="
-          echo "BUILD SUCCESS"
-          echo "=========================================="
+          echo "APK successfully built:"
+          ls -lh "$APK"
 
-          printf '%s\n' "${APKS[@]}"
-
-          echo
-          echo "APK details:"
-          ls -lh "${APKS[@]}"
-
-      - name: Upload V4 APK artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: UniversalTVPlayer-V4-APK
-          path: extracted/v3/app/build/outputs/apk/debug/*.apk
+          name: UniversalTVPlayer-V4-debug
+          path: player/v3/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 7

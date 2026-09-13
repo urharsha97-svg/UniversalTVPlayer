@@ -1,4 +1,4 @@
-name: Build Universal TV Player V4 APK
+name: Build UniversalTVPlayer V6 VLC Max
 
 on:
   workflow_dispatch:
@@ -18,13 +18,12 @@ jobs:
       - name: Show repository files
         run: |
           set -e
-
           echo "===== Repository root ====="
           ls -lah
 
           echo "===== ZIP files ====="
           find . -maxdepth 2 -type f \
-            \( -iname "*.zip" -o -iname "*.ZIP" \) \
+            -iname "*.zip" -o -iname "*.ZIP" \
             -print
 
       - name: Setup Java 17
@@ -38,26 +37,27 @@ jobs:
         with:
           gradle-version: "8.11.1"
 
-      - name: Find and Extract V4
+      - name: Locate and Extract V6
+        shell: bash
         run: |
           set -e
 
-          echo "Searching for UniversalTVPlayer V4 ZIP..."
+          echo "Searching for UniversalTVPlayer V6 ZIP..."
 
           ZIP_FILE=$(find . -maxdepth 2 -type f \
-            \( -iname "UniversalTVPlayer-V4.zip" \
-               -o -iname "*UniversalTVPlayer*V4*.zip" \) \
+            -iname "UniversalTVPlayer-V6-VLC-Max.zip" \
+               -o -iname "*UniversalTVPlayer*V6*.zip" \
             | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: UniversalTVPlayer V4 ZIP not found!"
+            echo "ERROR: UniversalTVPlayer V6 ZIP not found!"
             echo
             echo "Available files:"
             find . -maxdepth 3 -type f -print
             exit 1
           fi
 
-          echo "Using V4 ZIP:"
+          echo "Using V6 ZIP:"
           echo "$ZIP_FILE"
 
           rm -rf player
@@ -66,7 +66,7 @@ jobs:
           unzip -q "$ZIP_FILE" -d player
 
           echo
-          echo "===== Extracted V4 files ====="
+          echo "===== Extracted V6 files ====="
           find player -maxdepth 8 -type f | sort
 
       - name: Locate Android Project
@@ -90,12 +90,12 @@ jobs:
 
           PROJECT_DIR=$(dirname "$SETTINGS")
 
-          echo "Android V4 project found at:"
+          echo "Android V6 project found at:"
           echo "$PROJECT_DIR"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Verify Android V4 Project
+      - name: Verify Android V6 Project
         run: |
           set -e
 
@@ -123,18 +123,9 @@ jobs:
           fi
 
           echo
-          echo "===== settings.gradle.kts ====="
-          cat "$PROJECT_DIR/settings.gradle.kts"
+          echo "Android V6 project structure OK."
 
-          echo
-          echo "===== Root build.gradle.kts ====="
-          cat "$PROJECT_DIR/build.gradle.kts"
-
-          echo
-          echo "===== app/build.gradle.kts ====="
-          cat "$PROJECT_DIR/app/build.gradle.kts"
-
-      - name: Build Universal TV Player V4 Debug APK
+      - name: Build UniversalTVPlayer V6 Debug APKs
         run: |
           set -e
 
@@ -144,48 +135,41 @@ jobs:
           gradle --version
 
           echo
-          echo "===== Building V4 APK ====="
+          echo "===== Building V6 APK ====="
 
           gradle :app:assembleDebug \
             --no-daemon \
             --stacktrace \
             --warning-mode all
 
-      - name: Verify V4 APK
+      - name: Verify V6 APKs
         run: |
           set -e
 
-          echo "Searching for generated APK..."
+          echo "===== Generated APKs ====="
 
-          APK=$(find "$PROJECT_DIR/app/build/outputs/apk/debug" \
+          find "$PROJECT_DIR/app/build/outputs/apk" \
             -type f \
-            \( -name "*.apk" -o -name "*.APK" \) \
-            | head -n 1)
+            -name "*.apk" \
+            -print \
+            -exec ls -lh {} \;
 
-          if [ -z "$APK" ]; then
-            echo "ERROR: V4 APK was not generated!"
-            echo
-            echo "Build output:"
-            find "$PROJECT_DIR/app/build/outputs" \
-              -maxdepth 6 \
-              -type f \
-              -print || true
+          COUNT=$(find "$PROJECT_DIR/app/build/outputs/apk" \
+            -type f \
+            -name "*.apk" | wc -l)
+
+          if [ "$COUNT" -lt 1 ]; then
+            echo "ERROR: No APK generated!"
             exit 1
           fi
 
           echo
           echo "========================================"
-          echo " UNIVERSAL TV PLAYER V4 BUILD SUCCESS "
+          echo " UNIVERSAL TV PLAYER V6 BUILD SUCCESS "
           echo "========================================"
-          echo
-          echo "APK:"
-          ls -lh "$APK"
 
-          echo "APK=$APK" >> "$GITHUB_ENV"
-
-      - name: Upload Universal TV Player V4 APK
+      - name: Upload UniversalTVPlayer V6 APKs
         uses: actions/upload-artifact@v4
         with:
-          name: UniversalTVPlayer-V4-APK
-          path: ${{ env.APK }}
-          if-no-files-found: error
+          name: UniversalTVPlayer-V6-APKs
+         

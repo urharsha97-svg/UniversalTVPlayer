@@ -1,21 +1,15 @@
-name: Build UniversalTVPlayer V4
+name: Build UniversalTVPlayer V3
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
-
-permissions:
-  contents: read
+  push:
+    branches: [ main ]
 
 jobs:
   build:
-    name: Build APK
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Java 17
@@ -24,124 +18,17 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Find V4 ZIP
-        shell: bash
-        run: |
-          set -e
-
-          EXACT="UniversalTVPlayer-V4-UniversalEngine-ALL-OPTIONS.zip"
-
-          if [ -f "$EXACT" ]; then
-            ZIP="$EXACT"
-          else
-            mapfile -t ZIPS < <(
-              find . -maxdepth 1 -type f \
-                -name 'UniversalTVPlayer-V4-UniversalEngine-ALL-OPTIONS*.zip' \
-                -printf '%f\n'
-            )
-
-            if [ "${#ZIPS[@]}" -ne 1 ]; then
-              echo "ERROR: Expected exactly one V4 ZIP."
-              echo "Found:"
-              printf '%s\n' "${ZIPS[@]}"
-              exit 1
-            fi
-
-            ZIP="${ZIPS[0]}"
-          fi
-
-          echo "Using: $ZIP"
-          echo "ZIP=$ZIP" >> "$GITHUB_ENV"
-
-      - name: Extract V4 project
-        shell: bash
-        run: |
-          set -e
-
-          rm -rf player
-          mkdir -p player
-
-          unzip -q "$ZIP" -d player
-
-          if [ ! -f player/v3/settings.gradle.kts ]; then
-            echo "ERROR: Android project not found."
-            find player -maxdepth 4 -type f | sort
-            exit 1
-          fi
-
-          echo "Project found."
-
-      - name: Verify basic configuration
-        working-directory: player/v3
-        shell: bash
-        run: |
-          set -e
-
-          echo "=== Root build.gradle.kts ==="
-          cat build.gradle.kts
-
-          echo "=== App build.gradle.kts ==="
-          cat app/build.gradle.kts
-
-          echo "=== Configuration checks ==="
-
-          grep -q '8.10.2' build.gradle.kts
-          grep -q 'compileSdk = 36' app/build.gradle.kts
-          grep -q 'targetSdk = 35' app/build.gradle.kts
-          grep -q 'minSdk = 23' app/build.gradle.kts
-
-          echo "Configuration OK."
-
-      - name: Generate Gradle wrapper
-        working-directory: player/v3
-        shell: bash
-        run: |
-          set -e
-
-          gradle wrapper \
-            --gradle-version 8.11.1 \
-            --distribution-type bin
-
-          chmod +x gradlew
-
-      - name: Show Gradle environment
-        working-directory: player/v3
-        shell: bash
-        run: |
-          ./gradlew --version
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
 
       - name: Build Debug APK
-        working-directory: player/v3
-        shell: bash
-        run: |
-          set -e
-
-          ./gradlew :app:assembleDebug \
-            --stacktrace \
-            --no-daemon
-
-      - name: Verify APK
-        shell: bash
-        run: |
-          set -e
-
-          APK="player/v3/app/build/outputs/apk/debug/app-debug.apk"
-
-          if [ ! -f "$APK" ]; then
-            echo "ERROR: APK was not generated."
-            find player/v3/app/build -type f | sort || true
-            exit 1
-          fi
-
-          echo "=================================="
-          echo "APK BUILD SUCCESS"
-          echo "=================================="
-          ls -lh "$APK"
+        run: gradle :app:assembleDebug --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: UniversalTVPlayer-V4-debug
-          path: player/v3/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-          retention-days: 7
+          name: UniversalTVPlayer-V3-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+          

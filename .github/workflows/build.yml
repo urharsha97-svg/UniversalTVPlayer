@@ -31,7 +31,7 @@ jobs:
         run: |
           set -e
 
-          ZIP_FILE="./UniversalTVPlayer-V6-VLC-Max.zip"
+          ZIP_FILE="./UniversalTVPlayer-V6-VLC-Max-FIXED.zip"
 
           echo "Checking:"
           echo "$ZIP_FILE"

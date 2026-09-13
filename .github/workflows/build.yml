@@ -15,17 +15,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show repository files
-        run: |
-          set -e
-          echo "===== Repository root ====="
-          ls -lah
-
-          echo "===== ZIP files ====="
-          find . -maxdepth 2 -type f \
-            -iname "*.zip" -o -iname "*.ZIP" \
-            -print
-
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
@@ -37,139 +26,104 @@ jobs:
         with:
           gradle-version: "8.11.1"
 
-      - name: Locate and Extract V6
+      - name: Locate V6 ZIP
         shell: bash
         run: |
           set -e
 
-          echo "Searching for UniversalTVPlayer V6 ZIP..."
+          ZIP_FILE="./UniversalTVPlayer-V6-VLC-Max.zip"
 
-          ZIP_FILE=$(find . -maxdepth 2 -type f \
-            -iname "UniversalTVPlayer-V6-VLC-Max.zip" \
-               -o -iname "*UniversalTVPlayer*V6*.zip" \
-            | head -n 1)
+          echo "Checking:"
+          echo "$ZIP_FILE"
 
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: UniversalTVPlayer V6 ZIP not found!"
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "ERROR: V6 ZIP not found!"
             echo
-            echo "Available files:"
-            find . -maxdepth 3 -type f -print
+            echo "Repository files:"
+            ls -lah
             exit 1
           fi
 
-          echo "Using V6 ZIP:"
-          echo "$ZIP_FILE"
+          echo "V6 ZIP found successfully."
 
           rm -rf player
           mkdir -p player
 
           unzip -q "$ZIP_FILE" -d player
 
-          echo
-          echo "===== Extracted V6 files ====="
-          find player -maxdepth 8 -type f | sort
+          echo "V6 ZIP extracted."
 
       - name: Locate Android Project
+        shell: bash
         run: |
           set -e
 
-          echo "Searching for settings.gradle.kts..."
-
-          SETTINGS=$(find player \
-            -name "settings.gradle.kts" \
-            -type f \
-            | head -n 1)
+          SETTINGS=$(find player -type f -name "settings.gradle.kts" | head -n 1)
 
           if [ -z "$SETTINGS" ]; then
             echo "ERROR: settings.gradle.kts not found!"
-            echo
-            echo "Extracted directory:"
             find player -maxdepth 8 -type f -print
             exit 1
           fi
 
           PROJECT_DIR=$(dirname "$SETTINGS")
 
-          echo "Android V6 project found at:"
+          echo "Android project:"
           echo "$PROJECT_DIR"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Verify Android V6 Project
+      - name: Verify Project
+        shell: bash
         run: |
           set -e
 
-          echo "===== Project directory ====="
-          echo "$PROJECT_DIR"
+          test -f "$PROJECT_DIR/settings.gradle.kts"
+          test -f "$PROJECT_DIR/build.gradle.kts"
+          test -f "$PROJECT_DIR/app/build.gradle.kts"
+          test -f "$PROJECT_DIR/app/src/main/AndroidManifest.xml"
 
-          if [ ! -f "$PROJECT_DIR/settings.gradle.kts" ]; then
-            echo "ERROR: settings.gradle.kts missing!"
-            exit 1
-          fi
+          echo "Project structure OK."
 
-          if [ ! -f "$PROJECT_DIR/build.gradle.kts" ]; then
-            echo "ERROR: Root build.gradle.kts missing!"
-            exit 1
-          fi
-
-          if [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
-            echo "ERROR: app/build.gradle.kts missing!"
-            exit 1
-          fi
-
-          if [ ! -f "$PROJECT_DIR/app/src/main/AndroidManifest.xml" ]; then
-            echo "ERROR: AndroidManifest.xml missing!"
-            exit 1
-          fi
-
-          echo
-          echo "Android V6 project structure OK."
-
-      - name: Build UniversalTVPlayer V6 Debug APKs
+      - name: Build V6 Debug APK
+        shell: bash
         run: |
           set -e
 
           cd "$PROJECT_DIR"
-
-          echo "===== Gradle Version ====="
-          gradle --version
-
-          echo
-          echo "===== Building V6 APK ====="
 
           gradle :app:assembleDebug \
             --no-daemon \
             --stacktrace \
             --warning-mode all
 
-      - name: Verify V6 APKs
+      - name: Verify APK
+        shell: bash
         run: |
           set -e
 
-          echo "===== Generated APKs ====="
+          echo "Generated APK files:"
 
           find "$PROJECT_DIR/app/build/outputs/apk" \
             -type f \
             -name "*.apk" \
-            -print \
-            -exec ls -lh {} \;
+            -print
 
-          COUNT=$(find "$PROJECT_DIR/app/build/outputs/apk" \
+          APK_COUNT=$(find "$PROJECT_DIR/app/build/outputs/apk" \
             -type f \
             -name "*.apk" | wc -l)
 
-          if [ "$COUNT" -lt 1 ]; then
+          if [ "$APK_COUNT" -lt 1 ]; then
             echo "ERROR: No APK generated!"
             exit 1
           fi
 
-          echo
-          echo "========================================"
-          echo " UNIVERSAL TV PLAYER V6 BUILD SUCCESS "
-          echo "========================================"
+          echo "APK count: $APK_COUNT"
+          echo "V6 BUILD SUCCESS."
 
-      - name: Upload UniversalTVPlayer V6 APKs
+      - name: Upload V6 APKs
         uses: actions/upload-artifact@v4
         with:
           name: UniversalTVPlayer-V6-APKs
-         
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error

@@ -3,9 +3,7 @@ name: UniversalTVPlayer - Build Any ZIP
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-      - master
+    branches: [ main, master ]
 
 permissions:
   contents: read
@@ -13,241 +11,139 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-
-      # 1. Checkout
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Java 17
-      # IMPORTANT:
-      # Gradle cache intentionally disabled because
-      # the Gradle project is inside the ZIP.
       - name: Setup Java 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      # 3. Gradle
       - name: Setup Gradle 8.11.1
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
 
-      # 4. Find ZIP anywhere in repository
-      - name: Find UniversalTVPlayer ZIP
+      - name: Locate newest valid Android project ZIP
+        id: locate
         shell: bash
         run: |
           set -euo pipefail
+          echo '========================================'
+          echo 'Searching repository for Android project ZIP...'
+          echo '========================================'
 
-          echo "========================================"
-          echo "Searching repository for UniversalTVPlayer ZIP..."
-          echo "========================================"
-
-          mapfile -t ZIPS < <(
-            find . \
-              -type f \
-              -iname 'UniversalTVPlayer*.zip' \
-              -not -path './.git/*' \
-              -print | sort -V
-          )
-
-          if [ "${#ZIPS[@]}" -eq 0 ]; then
-            echo "ERROR: No UniversalTVPlayer ZIP found."
-            echo ""
-            echo "ZIP can be anywhere inside the repository."
+          mapfile -t zips < <(find . -type f -iname '*.zip' -not -path './.git/*' -print | sort -V)
+          if [ "${#zips[@]}" -eq 0 ]; then
+            echo 'ERROR: No ZIP file found anywhere in repository.'
             exit 1
           fi
 
-          echo ""
-          echo "ZIP files found:"
-          printf '%s\n' "${ZIPS[@]}"
+          valid=()
+          for z in "${zips[@]}"; do
+            echo
+            echo "Checking ZIP: $z"
+            unzip -t "$z" >/dev/null
+            mapfile -t entries < <(unzip -Z1 "$z")
 
-          # -----------------------------------------
-          # Find valid Android Gradle project ZIPs
-          # -----------------------------------------
+            has_settings=false
+            has_manifest=false
+            for entry in "${entries[@]}"; do
+              case "$entry" in
+                */settings.gradle|*/settings.gradle.kts|settings.gradle|settings.gradle.kts)
+                  has_settings=true ;;
+                */app/src/main/AndroidManifest.xml|app/src/main/AndroidManifest.xml)
+                  has_manifest=true ;;
+              esac
+            done
 
-          VALID=()
-
-          for ZIP in "${ZIPS[@]}"; do
-            echo ""
-            echo "Checking ZIP:"
-            echo "$ZIP"
-
-            if unzip -l "$ZIP" 2>/dev/null | \
-              grep -qE '(^|/)settings\.gradle(\.kts)?$'; then
-
-              echo "VALID: Android Gradle project"
-              VALID+=("$ZIP")
-
+            if [ "$has_settings" = true ] && [ "$has_manifest" = true ]; then
+              echo 'VALID: Android Gradle project detected.'
+              valid+=("$z")
             else
-              echo "SKIP: No settings.gradle/settings.gradle.kts"
+              echo "SKIP: settings=$has_settings manifest=$has_manifest"
             fi
           done
 
-          if [ "${#VALID[@]}" -eq 0 ]; then
-            echo ""
-            echo "ERROR: No valid Android Gradle project ZIP found."
+          if [ "${#valid[@]}" -eq 0 ]; then
+            echo
+            echo 'ERROR: No valid Android Gradle project ZIP found.'
             exit 1
           fi
 
-          # -----------------------------------------
-          # Select highest/latest ZIP name
-          # -----------------------------------------
+          selected="${valid[$((${#valid[@]} - 1))]}"
+          echo
+          echo "Selected ZIP: $selected"
 
-          ZIP_FILE="${VALID[$((${#VALID[@]} - 1))]}"
+          rm -rf extracted_project
+          mkdir -p extracted_project
+          unzip -q "$selected" -d extracted_project
 
-          echo ""
-          echo "========================================"
-          echo "SELECTED ZIP"
-          echo "========================================"
-          echo "$ZIP_FILE"
-          echo "========================================"
-
-          # -----------------------------------------
-          # Extract
-          # -----------------------------------------
-
-          rm -rf player
-          mkdir -p player
-
-          unzip -q "$ZIP_FILE" -d player
-
-          # -----------------------------------------
-          # Find Gradle project
-          # -----------------------------------------
-
-          SETTINGS="$(
-            find player \
-              -type f \
-              \( \
-                -name 'settings.gradle.kts' \
-                -o \
-                -name 'settings.gradle' \
-              \) \
-              -print -quit
-          )"
-
-          if [ -z "$SETTINGS" ]; then
-            echo "ERROR: settings.gradle(.kts) not found after extraction."
+          settings="$(find extracted_project -type f \( -name settings.gradle.kts -o -name settings.gradle \) -print -quit)"
+          if [ -z "$settings" ]; then
+            echo 'ERROR: Gradle settings file missing after extraction.'
             exit 1
           fi
 
-          PROJECT_DIR="$(dirname "$SETTINGS")"
+          project_dir="$(dirname "$settings")"
+          test -f "$project_dir/app/src/main/AndroidManifest.xml"
+          test -f "$project_dir/app/build.gradle.kts" -o -f "$project_dir/app/build.gradle"
 
-          echo ""
-          echo "========================================"
-          echo "PROJECT DIRECTORY"
-          echo "========================================"
-          echo "$PROJECT_DIR"
-          echo "========================================"
+          echo "Project directory: $project_dir"
+          echo "project_dir=$project_dir" >> "$GITHUB_OUTPUT"
 
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-      # 5. Show detected project
-      - name: Verify project
+      - name: Audit active entry point
         shell: bash
         run: |
           set -euo pipefail
+          cd "${{ steps.locate.outputs.project_dir }}"
 
-          echo "Project directory:"
-          echo "$PROJECT_DIR"
+          echo '=== MAIN ACTIVITY ==='
+          grep -nE 'class MainActivity|setContent|setContentView|UniversalTvPlayerRoot|PlayerView|PlayerControlView' \
+            app/src/main/java/com/universaltvplayer/app/MainActivity.kt || true
 
-          echo ""
-          echo "Project files:"
-          find "$PROJECT_DIR" \
-            -maxdepth 3 \
-            -type f \
-            -print | sort | head -300
-
-          echo ""
-
-          if [ ! -d "$PROJECT_DIR/app" ]; then
-            echo "ERROR: app module not found."
+          echo '=== LEGACY XML LAYOUT CHECK ==='
+          if [ -d app/src/main/res/layout ] && find app/src/main/res/layout -type f -print -quit | grep -q .; then
+            echo 'ERROR: Legacy res/layout files found.'
+            find app/src/main/res/layout -type f -print
             exit 1
           fi
 
-          echo "Android app module found."
+          echo '=== LEGACY PLAYER UI REFERENCE CHECK ==='
+          if grep -RInE 'PlayerView|PlayerControlView|setContentView\(' app/src/main/java app/src/main/res 2>/dev/null; then
+            echo 'ERROR: Legacy/default player UI reference detected.'
+            exit 1
+          fi
 
-      # 6. Build
-      - name: Build Debug APK
+          echo '=== MANIFEST ==='
+          grep -nE 'activity(-alias)?|MAIN|LAUNCHER|VIEW|label=|icon=' app/src/main/AndroidManifest.xml || true
+
+      - name: Build selected ZIP project
         shell: bash
         run: |
           set -euo pipefail
+          cd "${{ steps.locate.outputs.project_dir }}"
+          gradle :app:clean :app:assembleDebug --no-daemon --stacktrace --warning-mode all
 
-          cd "$PROJECT_DIR"
-
-          echo "========================================"
-          echo "BUILDING UNIVERSAL TV PLAYER"
-          echo "========================================"
-
-          if [ -x "./gradlew" ]; then
-
-            echo "Using Gradle Wrapper"
-
-            ./gradlew :app:assembleDebug \
-              --no-daemon \
-              --stacktrace \
-              --warning-mode all
-
-          else
-
-            echo "Using installed Gradle 8.11.1"
-
-            gradle :app:assembleDebug \
-              --no-daemon \
-              --stacktrace \
-              --warning-mode all
-
-          fi
-
-      # 7. Verify APK
       - name: Verify APK
         shell: bash
         run: |
           set -euo pipefail
-
-          APK_DIR="$PROJECT_DIR/app/build/outputs/apk"
-
-          echo "========================================"
-          echo "GENERATED APK FILES"
-          echo "========================================"
-
-          if [ ! -d "$APK_DIR" ]; then
-            echo "ERROR: APK output directory not found."
+          project='${{ steps.locate.outputs.project_dir }}'
+          mapfile -t apks < <(find "$project/app/build/outputs/apk" -type f -name '*.apk' -print)
+          if [ "${#apks[@]}" -eq 0 ]; then
+            echo 'ERROR: No APK generated.'
             exit 1
           fi
+          printf '%s\n' "${apks[@]}"
+          ls -lh "${apks[@]}"
 
-          find "$APK_DIR" \
-            -type f \
-            -name '*.apk' \
-            -print \
-            -exec ls -lh {} \;
-
-          COUNT="$(
-            find "$APK_DIR" \
-              -type f \
-              -name '*.apk' | wc -l
-          )"
-
-          if [ "$COUNT" -lt 1 ]; then
-            echo ""
-            echo "ERROR: No APK generated."
-            exit 1
-          fi
-
-          echo ""
-          echo "========================================"
-          echo "BUILD SUCCESS"
-          echo "APK COUNT: $COUNT"
-          echo "========================================"
-
-      # 8. Upload APK
-      - name: Upload APK artifacts
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: UniversalTVPlayer-APK
-          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/**/*.apk
+          name: UniversalTVPlayer-UI-Rewrite-APKs
+          path: ${{ steps.locate.outputs.project_dir }}/app/build/outputs/apk/**/*.apk
           if-no-files-found: error
+          retention-days: 30

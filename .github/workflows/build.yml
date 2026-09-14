@@ -1,4 +1,4 @@
-name: Build UniversalTVPlayer V6 VLC Max
+name: UniversalTVPlayer - Build Any ZIP
 
 on:
   workflow_dispatch:
@@ -7,123 +7,162 @@ on:
       - main
       - master
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
+          cache: gradle
 
-      - name: Setup Gradle
+      - name: Setup Gradle 8.11.1
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.11.1"
+          gradle-version: '8.11.1'
 
-      - name: Locate V6 ZIP
+      - name: Find UniversalTVPlayer ZIP
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          ZIP_FILE="./UniversalTVPlayer-V6-VLC-Max-FIXED.zip"
+          mkdir -p build-input
 
-          echo "Checking:"
-          echo "$ZIP_FILE"
+          echo "Searching entire repository for UniversalTVPlayer ZIP files..."
 
-          if [ ! -f "$ZIP_FILE" ]; then
-            echo "ERROR: V6 ZIP not found!"
-            echo
-            echo "Repository files:"
-            ls -lah
+          mapfile -t ZIPS < <(
+            find . \
+              -type f \
+              -iname 'UniversalTVPlayer*.zip' \
+              -not -path './.git/*' \
+              -print | sort -V
+          )
+
+          if [ "${#ZIPS[@]}" -eq 0 ]; then
+            echo "ERROR: No UniversalTVPlayer ZIP found anywhere in repository."
             exit 1
           fi
 
-          echo "V6 ZIP found successfully."
+          echo "ZIP files found:"
+          printf '%s\n' "${ZIPS[@]}"
+
+          VALID=()
+
+          for ZIP in "${ZIPS[@]}"; do
+            echo ""
+            echo "Checking: $ZIP"
+
+            if unzip -l "$ZIP" 2>/dev/null | \
+              grep -qE '(^|/)settings\.gradle(\.kts)?$'; then
+
+              echo "VALID PROJECT ZIP: $ZIP"
+              VALID+=("$ZIP")
+            else
+              echo "Skipping: not an Android Gradle project ZIP"
+            fi
+          done
+
+          if [ "${#VALID[@]}" -eq 0 ]; then
+            echo "ERROR: No valid Android Gradle project ZIP found."
+            exit 1
+          fi
+
+          # Last/highest sorted valid ZIP is selected.
+          ZIP_FILE="${VALID[$((${#VALID[@]} - 1))]}"
+
+          echo ""
+          echo "========================================"
+          echo "SELECTED ZIP:"
+          echo "$ZIP_FILE"
+          echo "========================================"
 
           rm -rf player
           mkdir -p player
 
           unzip -q "$ZIP_FILE" -d player
 
-          echo "V6 ZIP extracted."
-
-      - name: Locate Android Project
-        shell: bash
-        run: |
-          set -e
-
-          SETTINGS=$(find player -type f -name "settings.gradle.kts" | head -n 1)
+          SETTINGS="$(find player \
+            -type f \
+            \( -name 'settings.gradle.kts' -o -name 'settings.gradle' \) \
+            -print -quit)"
 
           if [ -z "$SETTINGS" ]; then
-            echo "ERROR: settings.gradle.kts not found!"
-            find player -maxdepth 8 -type f -print
+            echo "ERROR: settings.gradle(.kts) not found after extraction."
             exit 1
           fi
 
-          PROJECT_DIR=$(dirname "$SETTINGS")
-
-          echo "Android project:"
-          echo "$PROJECT_DIR"
+          PROJECT_DIR="$(dirname "$SETTINGS")"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Verify Project
+          echo ""
+          echo "Project directory:"
+          echo "$PROJECT_DIR"
+
+      - name: Show project structure
         shell: bash
         run: |
-          set -e
+          echo "Project:"
+          find "$PROJECT_DIR" -maxdepth 2 -type f | sort | head -200
 
-          test -f "$PROJECT_DIR/settings.gradle.kts"
-          test -f "$PROJECT_DIR/build.gradle.kts"
-          test -f "$PROJECT_DIR/app/build.gradle.kts"
-          test -f "$PROJECT_DIR/app/src/main/AndroidManifest.xml"
-
-          echo "Project structure OK."
-
-      - name: Build V6 Debug APK
+      - name: Build Debug APK
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           cd "$PROJECT_DIR"
 
-          gradle :app:assembleDebug \
-            --no-daemon \
-            --stacktrace \
-            --warning-mode all
+          if [ -x "./gradlew" ]; then
+            echo "Using project Gradle wrapper..."
+            ./gradlew :app:assembleDebug \
+              --no-daemon \
+              --stacktrace \
+              --warning-mode all
+          else
+            echo "Using installed Gradle 8.11.1..."
+            gradle :app:assembleDebug \
+              --no-daemon \
+              --stacktrace \
+              --warning-mode all
+          fi
 
       - name: Verify APK
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
-          echo "Generated APK files:"
+          APK_DIR="$PROJECT_DIR/app/build/outputs/apk"
 
-          find "$PROJECT_DIR/app/build/outputs/apk" \
+          echo "Searching APKs..."
+
+          find "$APK_DIR" \
             -type f \
-            -name "*.apk" \
-            -print
+            -name '*.apk' \
+            -print \
+            -exec ls -lh {} \;
 
-          APK_COUNT=$(find "$PROJECT_DIR/app/build/outputs/apk" \
-            -type f \
-            -name "*.apk" | wc -l)
+          COUNT="$(find "$APK_DIR" -type f -name '*.apk' | wc -l)"
 
-          if [ "$APK_COUNT" -lt 1 ]; then
-            echo "ERROR: No APK generated!"
+          if [ "$COUNT" -lt 1 ]; then
+            echo "ERROR: No APK generated."
             exit 1
           fi
 
-          echo "APK count: $APK_COUNT"
-          echo "V6 BUILD SUCCESS."
+          echo ""
+          echo "SUCCESS: $COUNT APK(s) generated."
 
-      - name: Upload V6 APKs
+      - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: UniversalTVPlayer-V6-APKs
+          name: UniversalTVPlayer-APK
           path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/**/*.apk
           if-no-files-found: error

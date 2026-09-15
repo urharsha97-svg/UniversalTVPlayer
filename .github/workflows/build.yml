@@ -3,6 +3,7 @@ name: UniversalTVPlayer V13 Step 2 - Media3
 on:
   workflow_dispatch:
   push:
+    branches: [main, master]
     paths:
       - "**.zip"
       - ".github/workflows/build.yml"
@@ -24,12 +25,13 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Gradle
+      - name: Setup Gradle 8.11.1
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: "8.11.1"
 
-      - name: Locate V13 ZIP
+      - name: Locate V13 Media3 ZIP
+        id: locate
         shell: bash
         run: |
           set -euo pipefail
@@ -37,114 +39,183 @@ jobs:
           ZIP=""
 
           while IFS= read -r -d '' f; do
-            if [[ "$(basename "$f")" == "UniversalTVPlayer-V13-Step2-Media3.zip" ]]; then
-              ZIP="$f"
-              break
-            fi
-          done < <(find . -type f -name "*.zip" -print0)
+            NAME="$(basename "$f")"
 
-          if [[ -z "$ZIP" ]]; then
-            echo "ERROR: UniversalTVPlayer-V13-Step2-Media3.zip not found."
-            echo "ZIP files found:"
-            find . -type f -name "*.zip" -print
+            case "$NAME" in
+              UniversalTVPlayer-V13-Step2-Media3.zip)
+                ZIP="$f"
+                break
+                ;;
+            esac
+          done < <(
+            find "$GITHUB_WORKSPACE" \
+              -type f \
+              -iname "*.zip" \
+              -not -path "*/.git/*" \
+              -print0
+          )
+
+          if [ -z "$ZIP" ]; then
+            echo "::error::UniversalTVPlayer-V13-Step2-Media3.zip not found."
+            echo "=== ZIP FILES FOUND ==="
+            find "$GITHUB_WORKSPACE" \
+              -type f \
+              -iname "*.zip" \
+              -not -path "*/.git/*" \
+              -print
             exit 1
           fi
 
-          echo "Using exact V13 ZIP:"
+          echo "=== SELECTED V13 ZIP ==="
           echo "$ZIP"
-          echo "ZIP_PATH=$ZIP" >> "$GITHUB_ENV"
+
+          unzip -t "$ZIP" >/dev/null
+
+          echo "ZIP_PATH=$ZIP" >> "$GITHUB_OUTPUT"
 
       - name: Extract V13 project
+        id: extract
         shell: bash
         run: |
           set -euo pipefail
 
-          rm -rf "$RUNNER_TEMP/v13"
-          mkdir -p "$RUNNER_TEMP/v13"
+          BUILD_ROOT="$RUNNER_TEMP/v13"
 
-          unzip -q "$ZIP_PATH" -d "$RUNNER_TEMP/v13"
+          rm -rf "$BUILD_ROOT"
+          mkdir -p "$BUILD_ROOT"
 
-          echo "Extracted files:"
-          find "$RUNNER_TEMP/v13" -maxdepth 4 -type f | head -100
+          unzip -q "${{ steps.locate.outputs.ZIP_PATH }}" -d "$BUILD_ROOT"
 
-      - name: Locate Android project
+          echo "=== EXTRACTED PROJECT FILES ==="
+          find "$BUILD_ROOT" -maxdepth 5 -type f | sort | head -200
+
+      - name: Locate Android Gradle project
+        id: project
         shell: bash
         run: |
           set -euo pipefail
 
+          BUILD_ROOT="$RUNNER_TEMP/v13"
           PROJECT=""
 
-          while IFS= read -r -d '' f; do
-            DIR="$(dirname "$f")"
+          while IFS= read -r -d '' settings; do
+            DIR="$(dirname "$settings")"
 
-            if [[ -f "$DIR/app/src/main/AndroidManifest.xml" ]]; then
+            if [ -f "$DIR/app/src/main/AndroidManifest.xml" ] && \
+               { [ -f "$DIR/app/build.gradle.kts" ] || [ -f "$DIR/app/build.gradle" ]; }; then
               PROJECT="$DIR"
               break
             fi
-          done < <(find "$RUNNER_TEMP/v13" -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" \) -print0)
+          done < <(
+            find "$BUILD_ROOT" \
+              -type f \
+              \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+              -print0
+          )
 
-          if [[ -z "$PROJECT" ]]; then
-            echo "ERROR: Android project not found."
+          if [ -z "$PROJECT" ]; then
+            echo "::error::No complete Android Gradle project found."
             exit 1
           fi
 
-          echo "PROJECT=$PROJECT"
-          echo "PROJECT_DIR=$PROJECT" >> "$GITHUB_ENV"
+          echo "=== PROJECT ==="
+          echo "$PROJECT"
 
-      - name: Verify V13 Media3 project
+          echo "PROJECT_DIR=$PROJECT" >> "$GITHUB_OUTPUT"
+
+      - name: Verify V13 Media3 dependencies
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "=== PROJECT ==="
-          echo "$PROJECT_DIR"
+          PROJECT="${{ steps.project.outputs.PROJECT_DIR }}"
+          APP_GRADLE=""
 
-          echo "=== MANIFEST ==="
-          cat "$PROJECT_DIR/app/src/main/AndroidManifest.xml"
-
-          echo "=== MEDIA3 / EXOPLAYER CHECK ==="
-
-          if ! grep -R -E \
-            "androidx\.media3|ExoPlayer|MediaItem|PlayerView" \
-            "$PROJECT_DIR/app/src/main" \
-            "$PROJECT_DIR/app/build.gradle.kts" \
-            "$PROJECT_DIR/app/build.gradle" \
-            >/dev/null 2>&1; then
-            echo "ERROR: Media3/ExoPlayer references were not found."
+          if [ -f "$PROJECT/app/build.gradle.kts" ]; then
+            APP_GRADLE="$PROJECT/app/build.gradle.kts"
+          elif [ -f "$PROJECT/app/build.gradle" ]; then
+            APP_GRADLE="$PROJECT/app/build.gradle"
+          else
+            echo "::error::app Gradle file not found."
             exit 1
           fi
 
-          echo "Media3/ExoPlayer references found."
+          echo "=== APP GRADLE ==="
+          sed -n '1,260p' "$APP_GRADLE"
 
-          echo "=== FORBIDDEN ENGINE CHECK ==="
+          echo "=== MEDIA3 / EXOPLAYER CHECK ==="
 
-          if grep -R -E \
-            "LibVLC|libvlc|FFmpeg|FfmpegAudioRenderer" \
-            "$PROJECT_DIR/app/src/main" \
-            "$PROJECT_DIR/app/build.gradle.kts" \
-            "$PROJECT_DIR/app/build.gradle" \
-            >/dev/null 2>&1; then
-            echo "ERROR: Forbidden LibVLC/FFmpeg native engine reference detected."
+          if grep -RInE \
+            'androidx\.media3|media3-exoplayer|media3-ui|media3-common|ExoPlayer|MediaItem|PlayerView' \
+            "$PROJECT/app/src/main" \
+            "$APP_GRADLE" \
+            "$PROJECT/build.gradle.kts" \
+            "$PROJECT/build.gradle" \
+            "$PROJECT/gradle/libs.versions.toml" \
+            2>/dev/null; then
+
+            echo "Media3/ExoPlayer references found."
+
+          else
+
+            echo "::error::Media3/ExoPlayer references were not found."
+            echo ""
+            echo "The V13 ZIP itself does not currently contain a detectable Media3 dependency or source reference."
+            echo ""
+            echo "Expected examples:"
+            echo "  androidx.media3:media3-exoplayer"
+            echo "  androidx.media3:media3-ui"
+            echo "  androidx.media3:media3-common"
+            echo "  androidx.media3.exoplayer.ExoPlayer"
+            echo "  androidx.media3.common.MediaItem"
+            echo "  androidx.media3.ui.PlayerView"
+            exit 1
+          fi
+
+      - name: Verify forbidden native engines
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROJECT="${{ steps.project.outputs.PROJECT_DIR }}"
+
+          if grep -RInE \
+            'LibVLC|libvlc|org\.videolan|FFmpeg|FfmpegAudioRenderer' \
+            "$PROJECT/app/src/main" \
+            "$PROJECT/app/build.gradle.kts" \
+            "$PROJECT/app/build.gradle" \
+            2>/dev/null; then
+
+            echo "::error::Forbidden LibVLC/FFmpeg native engine reference detected."
             exit 1
           fi
 
           echo "No LibVLC/FFmpeg native engine references."
 
-          echo "=== JVM CONFIG ==="
+      - name: Verify JVM 17
+        shell: bash
+        run: |
+          set -euo pipefail
 
-          grep -R -E \
-            "JavaVersion\.VERSION_17|jvmTarget.*17" \
-            "$PROJECT_DIR/app/build.gradle.kts" \
-            "$PROJECT_DIR/app/build.gradle" \
-            >/dev/null 2>&1 || {
-              echo "ERROR: JVM 17 configuration not found."
-              exit 1
-            }
+          PROJECT="${{ steps.project.outputs.PROJECT_DIR }}"
 
-          echo "JVM 17 configuration found."
+          if grep -RInE \
+            'JavaVersion\.VERSION_17|jvmTarget.*17|jvmToolchain\(17\)' \
+            "$PROJECT/app/build.gradle.kts" \
+            "$PROJECT/app/build.gradle" \
+            "$PROJECT/build.gradle.kts" \
+            "$PROJECT/build.gradle" \
+            2>/dev/null; then
+
+            echo "JVM 17 configuration found."
+
+          else
+            echo "::error::JVM 17 configuration not found."
+            exit 1
+          fi
 
       - name: Build V13 Debug APK
-        working-directory: ${{ env.PROJECT_DIR }}
+        working-directory: ${{ steps.project.outputs.PROJECT_DIR }}
         shell: bash
         run: |
           set -euo pipefail
@@ -161,21 +232,30 @@ jobs:
         run: |
           set -euo pipefail
 
-          APK="$(find "$PROJECT_DIR/app/build/outputs/apk" -type f -name "*.apk" | head -1)"
+          PROJECT="${{ steps.project.outputs.PROJECT_DIR }}"
 
-          if [[ -z "$APK" ]]; then
-            echo "ERROR: APK was not generated."
+          APK="$(find \
+            "$PROJECT/app/build/outputs/apk" \
+            -type f \
+            -name "*.apk" \
+            -print -quit)"
+
+          if [ -z "$APK" ]; then
+            echo "::error::APK was not generated."
             exit 1
           fi
 
-          echo "APK generated:"
-          echo "$APK"
+          echo "=== APK ==="
+          ls -lh "$APK"
+          sha256sum "$APK"
 
           mkdir -p "$RUNNER_TEMP/apk"
-          cp "$APK" "$RUNNER_TEMP/apk/UniversalTVPlayer-V13-Step2-Media3-debug.apk"
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v5
+          cp "$APK" \
+            "$RUNNER_TEMP/apk/UniversalTVPlayer-V13-Step2-Media3-debug.apk"
+
+      - name: Upload V13 Media3 APK
+        uses: actions/upload-artifact@v6
         with:
           name: UniversalTVPlayer-V13-Step2-Media3
           path: ${{ runner.temp }}/apk/UniversalTVPlayer-V13-Step2-Media3-debug.apk

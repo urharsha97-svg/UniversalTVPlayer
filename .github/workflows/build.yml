@@ -1,9 +1,9 @@
-name: UniversalTVPlayer - Build Any ZIP
+name: UniversalTVPlayer V12 Baseline
 
 on:
   workflow_dispatch:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
 
 permissions:
   contents: read
@@ -11,7 +11,6 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -27,161 +26,86 @@ jobs:
         with:
           gradle-version: '8.11.1'
 
-      - name: Discover Android project (recursive ZIP support)
-        id: discover
+      - name: Locate V12 baseline ZIP
+        id: locate
         shell: bash
         run: |
           set -euo pipefail
+          rm -rf "$RUNNER_TEMP/v12"
+          mkdir -p "$RUNNER_TEMP/v12/project"
 
-          BUILD_ROOT="$RUNNER_TEMP/build"
-          rm -rf "$BUILD_ROOT"
-          mkdir -p "$BUILD_ROOT"
+          mapfile -t ZIPS < <(find "$GITHUB_WORKSPACE" -type f -iname '*.zip' -not -path '*/.git/*' -print | sort)
+          [ "${#ZIPS[@]}" -gt 0 ] || { echo '::error::No ZIP found in repository.'; exit 1; }
 
-          echo "=== Repository ZIPs ==="
-          mapfile -t ZIPS < <(
-            find "$GITHUB_WORKSPACE" -type f -iname '*.zip' \
-              -not -path "$GITHUB_WORKSPACE/.git/*" \
-              -print | sort
-          )
-          printf '%s\n' "${ZIPS[@]:-<none>}"
+          SELECTED=""
+          for z in "${ZIPS[@]}"; do
+            case "$(basename "$z")" in
+              *V12-Baseline-AndroidX-Fixed*.zip|*V12-Baseline-Fixed*.zip|*V12-Baseline*.zip) SELECTED="$z";;
+            esac
+          done
+          [ -n "$SELECTED" ] || { echo '::error::V12 Baseline ZIP not found.'; exit 1; }
 
-          # Also support a repository that already contains Gradle source.
-          DIRECT_SETTINGS="$({
-            find "$GITHUB_WORKSPACE" -type f \
-              \( -name settings.gradle.kts -o -name settings.gradle \) \
-              -not -path "$GITHUB_WORKSPACE/.git/*" \
-              -print -quit;
-          })"
+          echo "=== SELECTED ZIP ==="
+          echo "$SELECTED"
+          unzip -t "$SELECTED" >/dev/null
+          unzip -q "$SELECTED" -d "$RUNNER_TEMP/v12/project"
 
-          if [ -n "$DIRECT_SETTINGS" ]; then
-            DIRECT_ROOT="$(dirname "$DIRECT_SETTINGS")"
-            if [ -f "$DIRECT_ROOT/app/src/main/AndroidManifest.xml" ] && \
-               { [ -f "$DIRECT_ROOT/build.gradle.kts" ] || [ -f "$DIRECT_ROOT/build.gradle" ]; }; then
-              echo "Using direct Gradle project: $DIRECT_ROOT"
-              echo "project_dir=$DIRECT_ROOT" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          fi
+          SETTINGS="$(find "$RUNNER_TEMP/v12/project" -type f \( -name settings.gradle.kts -o -name settings.gradle \) -print -quit)"
+          [ -n "$SETTINGS" ] || { echo '::error::No Gradle settings file in ZIP.'; exit 1; }
+          PROJECT_DIR="$(dirname "$SETTINGS")"
+          test -f "$PROJECT_DIR/app/src/main/AndroidManifest.xml"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
-          if [ "${#ZIPS[@]}" -eq 0 ]; then
-            echo "::error::No .zip archive and no direct Gradle project found."
-            exit 1
-          fi
-
-          # Recursively unpack ZIP -> ZIP -> project archives. The queue is
-          # path-based, so the workflow does not assume any repository folder name.
-          QUEUE_FILE="$BUILD_ROOT/zip_queue.txt"
-          printf '%s\n' "${ZIPS[@]}" > "$QUEUE_FILE"
-
-          seen=0
-          candidate=0
-
-          while IFS= read -r ZIP_PATH; do
-            [ -n "$ZIP_PATH" ] || continue
-            seen=$((seen + 1))
-
-            if ! unzip -t "$ZIP_PATH" >/dev/null 2>&1; then
-              echo "::warning::Skipping invalid ZIP: $ZIP_PATH"
-              continue
-            fi
-
-            OUT="$BUILD_ROOT/archive_$seen"
-            rm -rf "$OUT"
-            mkdir -p "$OUT"
-            echo "Extracting: $ZIP_PATH -> $OUT"
-            unzip -q "$ZIP_PATH" -d "$OUT"
-
-            SETTINGS_LIST="$BUILD_ROOT/settings_$seen.txt"
-            find "$OUT" -type f \
-              \( -name settings.gradle.kts -o -name settings.gradle \) \
-              -print > "$SETTINGS_LIST"
-
-            while IFS= read -r SETTINGS; do
-              [ -n "$SETTINGS" ] || continue
-              ROOT="$(dirname "$SETTINGS")"
-              if [ -f "$ROOT/app/src/main/AndroidManifest.xml" ] && \
-                 { [ -f "$ROOT/build.gradle.kts" ] || [ -f "$ROOT/build.gradle" ]; }; then
-                echo "FOUND_ANDROID_PROJECT=$ROOT"
-                echo "project_dir=$ROOT" >> "$GITHUB_OUTPUT"
-                candidate=1
-                break 2
-              fi
-            done < "$SETTINGS_LIST"
-
-            # If this archive contains another archive, inspect that too.
-            find "$OUT" -type f -iname '*.zip' -print >> "$QUEUE_FILE"
-          done < "$QUEUE_FILE"
-
-          if [ "$candidate" -ne 1 ]; then
-            echo "::error::No complete Android Gradle project found in repository or nested ZIPs."
-            echo "Expected settings.gradle(.kts), build.gradle(.kts), and app/src/main/AndroidManifest.xml."
-            exit 1
-          fi
-
-      - name: Verify project structure and active entry point
+      - name: Verify V12 minimal baseline
         shell: bash
         run: |
           set -euo pipefail
-          PROJECT="${{ steps.discover.outputs.project_dir }}"
-          echo "=== PROJECT ==="
+          PROJECT="${{ steps.locate.outputs.PROJECT_DIR }}"
+          MAIN="$(find "$PROJECT/app/src/main/java" -type f -name MainActivity.kt -print -quit)"
+          [ -n "$MAIN" ] || { echo '::error::MainActivity.kt not found.'; exit 1; }
+
+          echo '=== PROJECT ==='
           echo "$PROJECT"
+          echo '=== MAIN ACTIVITY ==='
+          sed -n '1,220p' "$MAIN"
 
-          test -f "$PROJECT/settings.gradle.kts" -o -f "$PROJECT/settings.gradle"
-          test -f "$PROJECT/build.gradle.kts" -o -f "$PROJECT/build.gradle"
-          test -f "$PROJECT/app/build.gradle.kts" -o -f "$PROJECT/app/build.gradle"
-          test -f "$PROJECT/app/src/main/AndroidManifest.xml"
-
-          echo "=== WRAPPER CONFIG ==="
-          if [ -f "$PROJECT/gradle/wrapper/gradle-wrapper.properties" ]; then
-            cat "$PROJECT/gradle/wrapper/gradle-wrapper.properties"
-          else
-            echo "No Gradle wrapper properties; CI will use Gradle 8.11.1 installed above."
-          fi
-
-          echo "=== MAIN ACTIVITY ==="
-          grep -nE "class MainActivity|setContent|setContentView|UniversalTvPlayerRoot|PlayerView|PlayerControlView" \
-            "$PROJECT/app/src/main/java/com/universaltvplayer/app/MainActivity.kt" || true
-
-          if find "$PROJECT/app/src/main/res/layout" -type f -print -quit 2>/dev/null | grep -q .; then
-            echo "::error::Legacy res/layout files found."
-            find "$PROJECT/app/src/main/res/layout" -type f -print
+          # V12 intentionally uses a basic native Android view hierarchy.
+          # Do NOT reject setContentView; that is the baseline itself.
+          if grep -RInE 'ExoPlayer|androidx\.media3|LibVLC|org\.videolan|FFmpeg|Ffmpeg|SurfaceView|TextureView|PlayerView|PlayerControlView|RoomDatabase|SQLiteOpenHelper' \
+              "$PROJECT/app/src/main" "$PROJECT/app/build.gradle.kts" "$PROJECT/app/build.gradle" 2>/dev/null; then
+            echo '::error::V12 baseline contains a media/native/database dependency.'
             exit 1
           fi
 
-          if grep -RInE "PlayerView|PlayerControlView|setContentView\(" \
-            "$PROJECT/app/src/main/java" "$PROJECT/app/src/main/res" 2>/dev/null; then
-            echo "::error::Legacy/default player UI reference detected."
-            exit 1
-          fi
+          grep -q 'setContentView' "$MAIN"
+          grep -q 'Universal TV Player' "$MAIN"
+          grep -q 'BASELINE OK' "$MAIN"
+          grep -q 'android:name=".UniversalTvApplication"' "$PROJECT/app/src/main/AndroidManifest.xml"
+          grep -q 'android.intent.action.MAIN' "$PROJECT/app/src/main/AndroidManifest.xml"
+          grep -q 'android.intent.category.LEANBACK_LAUNCHER' "$PROJECT/app/src/main/AndroidManifest.xml"
+          grep -q 'android.useAndroidX=true' "$PROJECT/gradle.properties"
 
-          echo "=== MANIFEST ==="
-          grep -nE "application|activity|activity-alias|MAIN|LAUNCHER|LEANBACK|VIEW|SEND|android:name|android:label" \
-            "$PROJECT/app/src/main/AndroidManifest.xml"
+          echo '=== V12 MINIMAL AUDIT: PASS ==='
 
-      - name: Build :app:assembleDebug
+      - name: Build V12 debug APK
         shell: bash
         run: |
           set -euo pipefail
-          cd "${{ steps.discover.outputs.project_dir }}"
+          cd "${{ steps.locate.outputs.PROJECT_DIR }}"
           gradle :app:clean :app:assembleDebug --no-daemon --stacktrace --warning-mode all
 
       - name: Verify APK
         shell: bash
         run: |
           set -euo pipefail
-          PROJECT="${{ steps.discover.outputs.project_dir }}"
-          APK="$(find "$PROJECT/app/build/outputs/apk" -type f -name '*.apk' -print -quit)"
-          if [ -z "$APK" ]; then
-            echo "::error::No APK was produced."
-            exit 1
-          fi
-          echo "APK: $APK"
+          APK="${{ steps.locate.outputs.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
           ls -lh "$APK"
+          sha256sum "$APK"
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+      - name: Upload V12 baseline APK
+        uses: actions/upload-artifact@v6
         with:
-          name: UniversalTVPlayer-V11.3-APKs
-          path: ${{ steps.discover.outputs.project_dir }}/app/build/outputs/apk/**/*.apk
+          name: UniversalTVPlayer-V12-Baseline-debug
+          path: ${{ steps.locate.outputs.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-          

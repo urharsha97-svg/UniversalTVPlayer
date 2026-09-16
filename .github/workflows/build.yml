@@ -1,636 +1,231 @@
-name: UniversalTVPlayer V13 Step 2 - Media3
+name: UniversalTVPlayer V14 - Full Build Diagnostics
 
 on:
-  push:
-    branches:
-      - "**"
-
-  pull_request:
-    branches:
-      - "**"
-
   workflow_dispatch:
+  push:
+    branches: [ main, master ]
+    paths:
+      - '**/*.zip'
+      - '**/*.kt'
+      - '**/*.kts'
+      - '**/*.xml'
+      - '.github/workflows/build.yml'
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: Build UniversalTVPlayer V13 Media3
+    name: Build UniversalTVPlayer + ALL Errors
     runs-on: ubuntu-latest
 
     steps:
-
-      # ============================================================
-      # CHECKOUT
-      # ============================================================
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
-
-      # ============================================================
-      # JAVA 17
-      # ============================================================
       - name: Setup Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
 
-
-      # ============================================================
-      # SETUP GRADLE 8.11.1
-      # IMPORTANT:
-      # This project ZIP does NOT contain gradlew.
-      # Therefore we install Gradle directly.
-      # ============================================================
       - name: Setup Gradle 8.11.1
         uses: gradle/actions/setup-gradle@v6
         with:
-          gradle-version: "8.11.1"
+          gradle-version: '8.11.1'
 
-
-      # ============================================================
-      # LOCATE V13 ZIP
-      # ============================================================
-      - name: Locate V13 ZIP
-        id: locate_zip
+      - name: Ensure Android SDK 36
         shell: bash
         run: |
           set -euo pipefail
-
-          echo "========================================"
-          echo " SEARCHING FOR V13 ZIP"
-          echo "========================================"
-
-          ZIP_FILE=""
-
-          while IFS= read -r file; do
-            ZIP_FILE="$file"
-            break
-          done < <(
-            find . \
-              -type f \
-              -name "UniversalTVPlayer-V13-Step2-Media3.zip" \
-              -print
-          )
-
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: UniversalTVPlayer-V13-Step2-Media3.zip was not found."
-            echo
-            echo "Available ZIP files:"
-            find . -type f -name "*.zip" -print || true
-            exit 1
-          fi
-
-          echo "Found ZIP:"
-          echo "$ZIP_FILE"
-
-          echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
-
-
-      # ============================================================
-      # EXTRACT V13 PROJECT
-      # ============================================================
-      - name: Extract V13 project
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          rm -rf "$RUNNER_TEMP/v13"
-
-          mkdir -p "$RUNNER_TEMP/v13"
-
-          unzip -q \
-            "${{ steps.locate_zip.outputs.zip_file }}" \
-            -d "$RUNNER_TEMP/v13"
-
-          echo "========================================"
-          echo " EXTRACTED V13 PROJECT"
-          echo "========================================"
-
-          find "$RUNNER_TEMP/v13" \
-            -maxdepth 5 \
-            -type f \
-            -print | head -300
-
-
-      # ============================================================
-      # LOCATE ANDROID GRADLE PROJECT
-      # ============================================================
-      - name: Locate Android project
-        id: project
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          PROJECT_DIR=""
-
-          while IFS= read -r settings_file; do
-
-            candidate="$(dirname "$settings_file")"
-
-            if [ -f "$candidate/app/build.gradle.kts" ] || \
-               [ -f "$candidate/app/build.gradle" ]; then
-
-              PROJECT_DIR="$candidate"
+          SDKMANAGER=""
+          for p in \
+            "${ANDROID_HOME:-}/cmdline-tools/latest/bin/sdkmanager" \
+            "${ANDROID_SDK_ROOT:-}/cmdline-tools/latest/bin/sdkmanager" \
+            "${ANDROID_HOME:-}/tools/bin/sdkmanager" \
+            "${ANDROID_SDK_ROOT:-}/tools/bin/sdkmanager"; do
+            if [ -x "$p" ]; then
+              SDKMANAGER="$p"
               break
-
             fi
+          done
+          if [ -z "$SDKMANAGER" ]; then
+            echo "::error::sdkmanager not found"
+            exit 1
+          fi
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;35.0.0"
 
-          done < <(
-            find "$RUNNER_TEMP/v13" \
-              -type f \
-              \( \
-                -name "settings.gradle.kts" \
-                -o \
-                -name "settings.gradle" \
-              \) \
-              -print
+      - name: Discover Android project (V14 first, never require V13)
+        id: discover
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUILD_ROOT="$RUNNER_TEMP/universal-build"
+          rm -rf "$BUILD_ROOT"
+          mkdir -p "$BUILD_ROOT"
+
+          is_project() {
+            local ROOT="$1"
+            [ -f "$ROOT/settings.gradle.kts" ] || [ -f "$ROOT/settings.gradle" ] || return 1
+            [ -f "$ROOT/app/src/main/AndroidManifest.xml" ] || return 1
+            [ -f "$ROOT/app/build.gradle.kts" ] || [ -f "$ROOT/app/build.gradle" ] || return 1
+          }
+
+          # First allow a normal repository checkout containing the Android project.
+          if is_project "$GITHUB_WORKSPACE"; then
+            echo "project_dir=$GITHUB_WORKSPACE" >> "$GITHUB_OUTPUT"
+            echo "source=repository" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Otherwise discover a project inside ZIP archives.
+          mapfile -t ZIPS < <(
+            find "$GITHUB_WORKSPACE" -type f -iname '*.zip' -not -path '*/.git/*' -print |
+            awk '
+              /UniversalTVPlayer-V14-UniversalEngine\.zip$/ { print "0 " $0; next }
+              { print "1 " $0 }
+            ' | sort | cut -d' ' -f2-
           )
 
-          if [ -z "$PROJECT_DIR" ]; then
-
-            echo "ERROR: Android Gradle project was not found."
-
-            echo
-            echo "V13 extracted files:"
-            find "$RUNNER_TEMP/v13" \
-              -maxdepth 8 \
-              -type f \
-              -print
-
-            exit 1
-
-          fi
-
-          echo "========================================"
-          echo " ANDROID PROJECT FOUND"
-          echo "========================================"
-
-          echo "PROJECT_DIR=$PROJECT_DIR"
-
-          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
-
-
-      # ============================================================
-      # VERIFY PROJECT STRUCTURE
-      # ============================================================
-      - name: Verify project structure
-        shell: bash
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
-        run: |
-          set -euo pipefail
-
-          echo "========================================"
-          echo " PROJECT STRUCTURE CHECK"
-          echo "========================================"
-
-          echo "Project:"
-          echo "$PROJECT_DIR"
-
-          echo
-
-          if [ -f "$PROJECT_DIR/settings.gradle.kts" ]; then
-            echo "FOUND: settings.gradle.kts"
-          elif [ -f "$PROJECT_DIR/settings.gradle" ]; then
-            echo "FOUND: settings.gradle"
-          else
-            echo "ERROR: settings.gradle(.kts) missing."
+          if [ "${#ZIPS[@]}" -eq 0 ]; then
+            echo "::error::No Android project and no ZIP archive were found."
             exit 1
           fi
 
-          if [ -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
-            echo "FOUND: app/build.gradle.kts"
-          elif [ -f "$PROJECT_DIR/app/build.gradle" ]; then
-            echo "FOUND: app/build.gradle"
-          else
-            echo "ERROR: app Gradle file missing."
-            exit 1
-          fi
+          INDEX=0
+          for ZIP in "${ZIPS[@]}"; do
+            if ! unzip -t "$ZIP" >/dev/null 2>&1; then
+              echo "::warning::Skipping corrupt ZIP: $ZIP"
+              continue
+            fi
+            INDEX=$((INDEX + 1))
+            OUT="$BUILD_ROOT/archive_$INDEX"
+            mkdir -p "$OUT"
+            unzip -q "$ZIP" -d "$OUT"
 
-          if [ -d "$PROJECT_DIR/app/src/main" ]; then
-            echo "FOUND: app/src/main"
-          else
-            echo "ERROR: app/src/main missing."
-            exit 1
-          fi
-
-          echo
-          echo "Android project structure OK."
-
-
-      # ============================================================
-      # SHOW ROOT SETTINGS
-      # ============================================================
-      - name: Show root Gradle configuration
-        shell: bash
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
-        run: |
-          set -euo pipefail
-
-          echo "========================================"
-          echo " ROOT GRADLE CONFIGURATION"
-          echo "========================================"
-
-          if [ -f "$PROJECT_DIR/settings.gradle.kts" ]; then
-            cat "$PROJECT_DIR/settings.gradle.kts"
-          else
-            cat "$PROJECT_DIR/settings.gradle"
-          fi
-
-          echo
-
-          if [ -f "$PROJECT_DIR/build.gradle.kts" ]; then
-            echo "========================================"
-            echo " ROOT build.gradle.kts"
-            echo "========================================"
-            cat "$PROJECT_DIR/build.gradle.kts"
-          elif [ -f "$PROJECT_DIR/build.gradle" ]; then
-            echo "========================================"
-            echo " ROOT build.gradle"
-            echo "========================================"
-            cat "$PROJECT_DIR/build.gradle"
-          fi
-
-
-      # ============================================================
-      # SHOW APP GRADLE
-      # ============================================================
-      - name: Show APP Gradle
-        shell: bash
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
-        run: |
-          set -euo pipefail
-
-          echo "========================================"
-          echo " APP GRADLE"
-          echo "========================================"
-
-          if [ -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
-            cat "$PROJECT_DIR/app/build.gradle.kts"
-          else
-            cat "$PROJECT_DIR/app/build.gradle"
-          fi
-
-
-      # ============================================================
-      # VERIFY MEDIA3 / EXOPLAYER
-      # ============================================================
-      - name: Verify Media3 / ExoPlayer
-        shell: bash
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
-        run: |
-          set -euo pipefail
-
-          echo "========================================"
-          echo " MEDIA3 / EXOPLAYER CHECK"
-          echo "========================================"
-
-          MEDIA3_FOUND=0
-
-          SEARCH_TARGETS=(
-            "$PROJECT_DIR/app/src/main"
-            "$PROJECT_DIR/app/build.gradle.kts"
-            "$PROJECT_DIR/app/build.gradle"
-          )
-
-          for TARGET in "${SEARCH_TARGETS[@]}"; do
-
-            if [ -e "$TARGET" ]; then
-
-              if grep -R -E \
-                'androidx\.media3|media3-exoplayer|media3-ui|media3-common|ExoPlayer|MediaItem|PlayerView' \
-                "$TARGET" \
-                >/dev/null 2>&1
-              then
-                MEDIA3_FOUND=1
+            while IFS= read -r SETTINGS; do
+              ROOT="$(dirname "$SETTINGS")"
+              if is_project "$ROOT"; then
+                echo "project_dir=$ROOT" >> "$GITHUB_OUTPUT"
+                echo "source=$ZIP" >> "$GITHUB_OUTPUT"
+                exit 0
               fi
-
-            fi
-
+            done < <(find "$OUT" -type f \( -name settings.gradle.kts -o -name settings.gradle \) -print)
           done
 
-          if [ "$MEDIA3_FOUND" -ne 1 ]; then
+          echo "::error::No valid Android Gradle project was found in the repository or ZIP files."
+          exit 1
 
-            echo "ERROR: Media3/ExoPlayer references were not found."
-
-            echo
-            echo "Expected examples:"
-            echo "  androidx.media3"
-            echo "  media3-exoplayer"
-            echo "  media3-ui"
-            echo "  media3-common"
-            echo "  ExoPlayer"
-            echo "  MediaItem"
-            echo "  PlayerView"
-
-            exit 1
-
-          fi
-
-          echo "Media3/ExoPlayer references FOUND."
-
-          echo
-          echo "Detected Media3 references:"
-
-          grep -R -n -E \
-            'androidx\.media3|media3-exoplayer|media3-ui|media3-common|ExoPlayer|MediaItem|PlayerView' \
-            "$PROJECT_DIR/app/src/main" \
-            "$PROJECT_DIR/app/build.gradle.kts" \
-            "$PROJECT_DIR/app/build.gradle" \
-            2>/dev/null || true
-
-
-      # ============================================================
-      # VERIFY MEDIA3 DEPENDENCIES
-      # ============================================================
-      - name: Verify Media3 dependencies
+      - name: Source audit (reported but does not hide compiler errors)
         shell: bash
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
         run: |
-          set -euo pipefail
+          set +e
+          PROJECT="${{ steps.discover.outputs.project_dir }}"
+          AUDIT_LOG="$RUNNER_TEMP/source-audit.log"
+          : > "$AUDIT_LOG"
+          MAIN="$(find "$PROJECT/app/src/main/java" -type f -name MainActivity.kt -print -quit 2>/dev/null)"
 
-          echo "========================================"
-          echo " MEDIA3 DEPENDENCY CHECK"
-          echo "========================================"
-
-          GRADLE_FILE=""
-
-          if [ -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
-            GRADLE_FILE="$PROJECT_DIR/app/build.gradle.kts"
-          elif [ -f "$PROJECT_DIR/app/build.gradle" ]; then
-            GRADLE_FILE="$PROJECT_DIR/app/build.gradle"
-          fi
-
-          if [ -z "$GRADLE_FILE" ]; then
-            echo "ERROR: app Gradle file not found."
-            exit 1
-          fi
-
-          echo "Checking:"
-          echo "$GRADLE_FILE"
-
-          echo
-
-          if ! grep -E \
-            'androidx\.media3:media3-exoplayer' \
-            "$GRADLE_FILE" \
-            >/dev/null 2>&1
-          then
-            echo "ERROR: media3-exoplayer dependency not found."
-            exit 1
-          fi
-
-          echo "FOUND: media3-exoplayer"
-
-          if ! grep -E \
-            'androidx\.media3:media3-ui' \
-            "$GRADLE_FILE" \
-            >/dev/null 2>&1
-          then
-            echo "ERROR: media3-ui dependency not found."
-            exit 1
-          fi
-
-          echo "FOUND: media3-ui"
-
-          echo
-          echo "Media3 dependencies FOUND."
-
-
-      # ============================================================
-      # REJECT LEGACY MEDIA ENGINES
-      # ============================================================
-      - name: Reject legacy media engines
-        shell: bash
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
-        run: |
-          set -euo pipefail
-
-          echo "========================================"
-          echo " LEGACY MEDIA ENGINE CHECK"
-          echo "========================================"
-
-          if grep -R -E \
-            'LibVLC|libvlc|FFmpeg|ffmpeg' \
-            "$PROJECT_DIR/app/src/main" \
-            "$PROJECT_DIR/app/build.gradle.kts" \
-            "$PROJECT_DIR/app/build.gradle" \
-            >/dev/null 2>&1
-          then
-
-            echo "ERROR: Legacy LibVLC/FFmpeg references detected."
-
-            echo
-            echo "Detected references:"
-
-            grep -R -n -E \
-              'LibVLC|libvlc|FFmpeg|ffmpeg' \
-              "$PROJECT_DIR/app/src/main" \
-              "$PROJECT_DIR/app/build.gradle.kts" \
-              "$PROJECT_DIR/app/build.gradle" \
-              2>/dev/null || true
-
-            exit 1
-
-          fi
-
-          echo "No LibVLC/FFmpeg references detected."
-
-
-      # ============================================================
-      # VERIFY JAVA / KOTLIN 17
-      # ============================================================
-      - name: Verify Java / Kotlin target
-        shell: bash
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
-        run: |
-          set -euo pipefail
-
-          echo "========================================"
-          echo " JAVA / KOTLIN TARGET"
-          echo "========================================"
-
-          java -version
-
-          echo
-
-          if [ -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
-
-            if grep -E \
-              'JavaVersion\.VERSION_17|jvmTarget\s*=\s*"17"' \
-              "$PROJECT_DIR/app/build.gradle.kts" \
-              >/dev/null 2>&1
-            then
-              echo "Java/Kotlin 17 configuration FOUND."
+          check() {
+            local LABEL="$1"
+            local RESULT="$2"
+            if [ "$RESULT" -eq 0 ]; then
+              echo "PASS: $LABEL" | tee -a "$AUDIT_LOG"
             else
-              echo "WARNING: Java/Kotlin 17 configuration was not explicitly detected."
+              echo "FAIL: $LABEL" | tee -a "$AUDIT_LOG"
             fi
+          }
 
+          [ -n "$MAIN" ]; check 'MainActivity.kt exists' $?
+          grep -q 'NextRenderersFactory' "$MAIN" 2>/dev/null; check 'NextRenderersFactory' $?
+          grep -q 'DefaultLoadControl' "$MAIN" 2>/dev/null; check 'DefaultLoadControl' $?
+          grep -q 'HISTORY' "$MAIN" 2>/dev/null; check 'History feature' $?
+          grep -q 'FILE / STREAM DETAILS' "$MAIN" 2>/dev/null; check 'File/stream details' $?
+          grep -q 'KEYCODE_BACK' "$MAIN" 2>/dev/null; check 'Double-back handling' $?
+          grep -q 'nextlib-media3ext:1.11.0-0.15.0' "$PROJECT/app/build.gradle.kts" 2>/dev/null; check 'NextLib dependency' $?
+          grep -q 'media3-exoplayer-hls:1.11.0' "$PROJECT/app/build.gradle.kts" 2>/dev/null; check 'Media3 HLS' $?
+          grep -q 'media3-exoplayer-dash:1.11.0' "$PROJECT/app/build.gradle.kts" 2>/dev/null; check 'Media3 DASH' $?
+          grep -q 'media3-exoplayer-smoothstreaming:1.11.0' "$PROJECT/app/build.gradle.kts" 2>/dev/null; check 'Media3 SmoothStreaming' $?
+          grep -q 'android.permission.INTERNET' "$PROJECT/app/src/main/AndroidManifest.xml" 2>/dev/null; check 'INTERNET permission' $?
+
+          if grep -RInE 'LibVLC|libvlc|RoomDatabase|SQLiteOpenHelper' "$PROJECT/app/src/main" "$PROJECT/app/build.gradle.kts" 2>/dev/null; then
+            echo 'FAIL: Unrelated LibVLC/Room/SQLite stack detected' | tee -a "$AUDIT_LOG"
+          else
+            echo 'PASS: No unrelated LibVLC/Room/SQLite stack' | tee -a "$AUDIT_LOG"
           fi
 
-          echo
-          echo "Java 17 environment ready."
+          echo '=== SOURCE AUDIT COMPLETE ==='
 
-
-      # ============================================================
-      # VERIFY GRADLE COMMAND
-      # ============================================================
-      - name: Verify Gradle installation
+      - name: Build APK and collect ALL errors in one run
+        id: build
         shell: bash
         run: |
-          set -euo pipefail
+          set +e
+          PROJECT="${{ steps.discover.outputs.project_dir }}"
+          LOG="$RUNNER_TEMP/universal-build.log"
+          : > "$LOG"
 
-          echo "========================================"
-          echo " GRADLE VERSION"
-          echo "========================================"
+          echo '========================================' | tee -a "$LOG"
+          echo ' UNIVERSALTVPLAYER FULL BUILD' | tee -a "$LOG"
+          echo ' ALL ERRORS WILL BE COLLECTED' | tee -a "$LOG"
+          echo '========================================' | tee -a "$LOG"
 
-          gradle --version
+          cd "$PROJECT"
 
+          # --continue lets Gradle continue independent tasks where possible.
+          # The Kotlin compiler itself reports all source compilation errors in the same invocation.
+          gradle :app:clean :app:assembleDebug --continue --no-daemon --stacktrace --warning-mode all 2>&1 | tee -a "$LOG"
+          STATUS=${PIPESTATUS[0]}
 
-      # ============================================================
-      # BUILD DEBUG APK
-      #
-      # IMPORTANT:
-      # DO NOT USE ./gradlew
-      #
-      # The V13 ZIP does not contain Gradle Wrapper.
-      # Gradle 8.11.1 is installed directly above.
-      # ============================================================
-      - name: Build Debug APK
-        shell: bash
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
-        run: |
-          set -euo pipefail
+          echo '' | tee -a "$LOG"
+          echo '========================================' | tee -a "$LOG"
+          echo ' ALL ERROR LINES (DEDUPED)' | tee -a "$LOG"
+          echo '========================================' | tee -a "$LOG"
+          grep -E '(^e: |^[[:space:]]*e: |^[[:space:]]*error: |^[[:space:]]*\^ |FAILURE:|Execution failed for task|What went wrong:|Caused by:)' "$LOG" \
+            | sed 's/^[[:space:]]*//' \
+            | sort -u \
+            | tee "$RUNNER_TEMP/all-errors-deduped.txt" || true
+          echo '========================================' | tee -a "$LOG"
 
-          cd "$PROJECT_DIR"
+          echo '' | tee -a "$LOG"
+          echo '========================================' | tee -a "$LOG"
+          echo ' KOTLIN COMPILER ERRORS ONLY' | tee -a "$LOG"
+          echo '========================================' | tee -a "$LOG"
+          grep -E '(^e: |^[[:space:]]*e: )' "$LOG" \
+            | sed 's/^[[:space:]]*//' \
+            | sort -u \
+            | tee "$RUNNER_TEMP/kotlin-errors.txt" || true
+          echo '========================================' | tee -a "$LOG"
 
-          echo "========================================"
-          echo " GRADLE BUILD"
-          echo "========================================"
+          echo "Gradle exit code: $STATUS" | tee -a "$LOG"
+          exit "$STATUS"
 
-          echo "Using system Gradle:"
-          gradle --version
-
-          echo
-
-          echo "Starting clean Debug APK build..."
-
-          gradle \
-            :app:clean \
-            :app:assembleDebug \
-            --no-daemon \
-            --stacktrace \
-            --warning-mode all
-
-
-      # ============================================================
-      # LOCATE APK
-      # ============================================================
-      - name: Locate APK
-        id: apk
-        shell: bash
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
-        run: |
-          set -euo pipefail
-
-          echo "========================================"
-          echo " APK OUTPUT"
-          echo "========================================"
-
-          APK_FILE=""
-
-          while IFS= read -r file; do
-            APK_FILE="$file"
-            break
-          done < <(
-            find "$PROJECT_DIR/app/build/outputs/apk" \
-              -type f \
-              -name "*.apk" \
-              -print
-          )
-
-          if [ -z "$APK_FILE" ]; then
-
-            echo "ERROR: Debug APK was not generated."
-
-            echo
-            echo "Available build outputs:"
-
-            find "$PROJECT_DIR/app/build/outputs" \
-              -type f \
-              -print \
-              2>/dev/null || true
-
-            exit 1
-
-          fi
-
-          echo "APK FOUND:"
-          echo "$APK_FILE"
-
-          echo
-          echo "APK SIZE:"
-          du -h "$APK_FILE"
-
-          echo "apk_file=$APK_FILE" >> "$GITHUB_OUTPUT"
-
-
-      # ============================================================
-      # UPLOAD APK
-      # ============================================================
-      - name: Upload V13 APK
-        uses: actions/upload-artifact@v4
+      - name: Upload ALL diagnostics even when build fails
+        if: always()
+        uses: actions/upload-artifact@v6
         with:
-          name: UniversalTVPlayer-V13-Step2-Media3-debug
-          path: ${{ steps.apk.outputs.apk_file }}
-          if-no-files-found: error
+          name: UniversalTVPlayer-V14-FULL-DIAGNOSTICS
+          path: |
+            ${{ runner.temp }}/universal-build.log
+            ${{ runner.temp }}/all-errors-deduped.txt
+            ${{ runner.temp }}/kotlin-errors.txt
+            ${{ runner.temp }}/source-audit.log
+          if-no-files-found: ignore
 
-
-      # ============================================================
-      # FINAL SUMMARY
-      # ============================================================
-      - name: Build summary
+      - name: Verify APK
+        if: success()
         shell: bash
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
         run: |
-          echo
-          echo "========================================"
-          echo " UniversalTVPlayer V13"
-          echo " Step 2 - Media3"
-          echo " BUILD SUCCESS"
-          echo "========================================"
-          echo
-          echo "Project:"
-          echo "$PROJECT_DIR"
-          echo
-          echo "Media3:"
-          echo "FOUND"
-          echo
-          echo "ExoPlayer:"
-          echo "FOUND"
-          echo
-          echo "Gradle:"
-          echo "8.11.1"
-          echo
-          echo "Java:"
-          echo "17"
-          echo
-          echo "APK:"
-          echo "BUILT"
-          echo
-          echo "Artifact:"
-          echo "UniversalTVPlayer-V13-Step2-Media3-debug"
-          echo
-          echo "========================================"
+          APK="${{ steps.discover.outputs.project_dir }}/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          echo "APK: $APK"
+          ls -lh "$APK"
+          sha256sum "$APK"
+
+      - name: Upload APK
+        if: success()
+        uses: actions/upload-artifact@v6
+        with:
+          name: UniversalTVPlayer-V14-debug
+          path: ${{ steps.discover.outputs.project_dir }}/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
